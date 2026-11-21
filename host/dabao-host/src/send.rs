@@ -89,7 +89,8 @@ pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
     let (msg, rtt) = exchange(wire::TYPE_SIMULATE, input, wire::TYPE_SIMULATE, tcp)?;
     let r: SimResult = alloy_rlp::Decodable::decode(&mut &msg[..]).context("decode SimResult")?;
     println!("sent {} B, round trip {rtt:?} (verifier: {} us, peak heap {} B)", input.len(), r.micros, r.peak_heap);
-    print_sim(&r);
+    let chain_id = alloy_rlp::Decodable::decode(&mut &input[..]).map(|i: SimInput| i.chain_id).unwrap_or(1);
+    print_sim(&r, chain_id);
     Ok(())
 }
 
@@ -111,7 +112,7 @@ pub fn sign_checked(input: &[u8], tcp: Option<&str>) -> Result<(SimResult, Optio
         r.sim.peak_heap,
         r.signer
     );
-    print_sim(&r.sim);
+    print_sim(&r.sim, req.chain_id);
     if !r.refused.is_empty() {
         println!("NOT SIGNED: {}", String::from_utf8_lossy(&r.refused));
         return Ok((r.sim, None));
@@ -128,7 +129,12 @@ pub fn sign_checked(input: &[u8], tcp: Option<&str>) -> Result<(SimResult, Optio
         ("to", tx.to() == Some(t.to)),
         ("value", tx.value() == t.value),
         ("gas limit", tx.gas_limit() == t.gas_limit),
-        ("gas price", tx.gas_price() == Some(t.gas_price)),
+        ("tx type", tx.is_legacy() == t.max_priority_fee_per_gas.is_none()),
+        ("fees", match t.max_priority_fee_per_gas {
+            None => tx.gas_price() == Some(t.gas_price),
+            Some(tip) => tx.max_fee_per_gas() == t.gas_price && tx.max_priority_fee_per_gas() == Some(tip),
+        }),
+        ("no access list", tx.access_list().is_none_or(|l| l.0.is_empty())),
         ("calldata", tx.input() == &t.data),
     ];
     for (what, ok) in &checks {
@@ -141,8 +147,9 @@ pub fn sign_checked(input: &[u8], tcp: Option<&str>) -> Result<(SimResult, Optio
     Ok((r.sim, Some(r.signed_tx.to_vec())))
 }
 
-/// One line per effect, e.g. "ERC20_TRANSFER  0xccc… 13403325392869447809: 0x08a1… -> 0x8fb0…".
-fn describe(e: &sim_types::Effect) -> String {
+/// One line per effect, e.g. "ERC20 transfer  0.5 USDC: 0x08a1… -> 0x8fb0…" (amounts with the
+/// firmware's token list, the same the device uses for its shown fields).
+fn describe(e: &sim_types::Effect, chain_id: u64) -> String {
     use sim_types::effect as k;
     let name = match e.kind {
         k::NATIVE_OUT => "ETH out",
@@ -166,11 +173,15 @@ fn describe(e: &sim_types::Effect) -> String {
         k::NET_LOSS => "sender NET -",
         _ => "unknown kind",
     };
+    let set = &*TOKENS;
     let asset = if e.contract.is_zero() { "ETH".to_string() } else { e.contract.to_string() };
+    let amt = |a: Address| clear_sign::check::format_amount(set, chain_id, a, e.amount);
     match e.kind {
-        k::NATIVE_OUT | k::GAS_FEE => format!("{name:<20} {} wei from {}", e.amount, e.from),
-        k::NATIVE_IN => format!("{name:<20} {} wei to {}", e.amount, e.to),
-        k::NET_GAIN | k::NET_LOSS => format!("{name:<20} {} {asset}", e.amount),
+        k::NATIVE_OUT | k::GAS_FEE => format!("{name:<20} {} from {}", amt(Address::ZERO), e.from),
+        k::NATIVE_IN => format!("{name:<20} {} to {}", amt(Address::ZERO), e.to),
+        k::NET_GAIN | k::NET_LOSS => format!("{name:<20} {}", amt(e.contract)),
+        k::ERC20_TRANSFER | k::ERC20_APPROVAL => format!("{name:<20} {}: {} -> {}", amt(e.contract), e.from, e.to),
+        k::WRAP | k::UNWRAP => format!("{name:<20} {}: {} -> {}", amt(e.contract), e.from, e.to),
         k::UNEXPLAINED_STORAGE => format!("{name:<20} {asset}: {} slots changed, no recognised event", e.amount),
         k::POOL_SWAP | k::OWNERSHIP_TRANSFER | k::PROXY_UPGRADE | k::PROXY_ADMIN_CHANGE => {
             format!("{name:<20} {asset}: {} -> {}", e.from, e.to)
@@ -179,7 +190,10 @@ fn describe(e: &sim_types::Effect) -> String {
     }
 }
 
-fn print_sim(r: &SimResult) {
+/// The firmware's descriptor set (for its token list).
+static TOKENS: std::sync::LazyLock<clear_sign::model::DescriptorSet> = std::sync::LazyLock::new(clear_sign::builtin);
+
+fn print_sim(r: &SimResult, chain_id: u64) {
     if !r.error.is_empty() {
         println!("REJECTED: {}", String::from_utf8_lossy(&r.error));
         return;
@@ -187,7 +201,7 @@ fn print_sim(r: &SimResult) {
     println!("success={} gas_used={} output={}", r.success, r.gas_used, r.output);
     println!("effects ({}):", r.effects.len());
     for e in &r.effects {
-        println!("  {}", describe(e));
+        println!("  {}", describe(e, chain_id));
     }
     let cs = &r.clear_sign;
     let s = |b: &[u8]| String::from_utf8_lossy(b).to_string();
@@ -207,6 +221,9 @@ fn print_sim(r: &SimResult) {
         for v in &cs.violations {
             println!("  VIOLATION {}", s(v));
         }
+    }
+    for w in &cs.warnings {
+        println!("  WARNING {}", s(w));
     }
     if std::env::var_os("DABAO_VERBOSE").is_none() {
         return; // raw logs and state changes only with DABAO_VERBOSE=1

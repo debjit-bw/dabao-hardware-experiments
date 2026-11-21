@@ -71,12 +71,15 @@ with the registry's formats (Sepolia `context`). See PROGRESS.md for the transac
 
 ## Limits / next
 
-- Amounts are checked numerically; displays don't yet use token decimals or tickers (the device
-  would need trusted token metadata, e.g. descriptor `metadata.token` or a token list in
-  firmware).
-- Labels carry no machine-readable meaning: "Minimum to Receive" is not enforced against the
-  simulated output (the contract enforces it on chain anyway). Found on a real swap: its
-  `amountOutMinimum` was **0** (no slippage protection) — a good candidate for a warning.
+- Amounts are checked numerically and displayed with decimals and tickers only for tokens in the
+  firmware's trusted list (descriptors' `metadata.token` + `descriptors/tokens.json`); others are
+  shown in raw units with the token address. Extending the list is a firmware change, on purpose.
+- Labels carry no machine-readable meaning, so the slippage annotation works without them: any
+  shown amount of an asset the sender gains that is below the simulated gain is annotated with
+  the simulation ("…(simulated: X, N% lower)"), and warned about if it is 0 or under half of X
+  (`ClearSign.warnings`, not blocking; the policy engine decides). Found on a real mainnet swap:
+  `amountOutMinimum` = 0.
+- The shown fields also include "Network fee (simulated)" and "Max network fee".
 - Gains aren't checked (receiving more is not a risk), nor where the router sends intermediate
   tokens.
 - Only contract-calldata descriptors; EIP-712 (Permit2 signatures, UniswapX orders) is next and

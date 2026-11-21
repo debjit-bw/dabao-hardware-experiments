@@ -3,14 +3,15 @@
 //! * It has no server: nothing can send it requests. It connects to the verifier's private
 //!   signer channel and blocks in `OP_SIGNER_WAIT` until the verifier hands it a `SignJob`
 //!   (a transaction the verifier simulated and approved).
-//! * It builds the EIP-155 legacy transaction and its signing hash itself from those fields,
+//! * It builds the transaction (EIP-155 legacy or EIP-1559, empty access list) and its signing
+//!   hash itself from those fields,
 //!   checks the job is for its own address, signs with k256 and returns the EIP-2718 bytes.
 //! * The key: 32 bytes from the chip TRNG on first boot, kept in two keystore app slots
 //!   (key, then a header written last); emulator: a host file.
 
 mod store;
 
-use alloy_consensus::{SignableTransaction, TxEnvelope, TxLegacy};
+use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope, TxLegacy};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_primitives::{Address, B256, Signature, TxKind, keccak256};
 use k256::ecdsa::SigningKey;
@@ -21,25 +22,50 @@ fn address_of(key: &SigningKey) -> Address {
     Address::from_slice(&keccak256(&point.as_bytes()[1..])[12..])
 }
 
-/// Sign `job` as an EIP-155 legacy tx, or refuse (empty result).
+/// Sign `job` (EIP-155 legacy, or EIP-1559 when it has a priority fee), or refuse.
 fn sign(key: &SigningKey, me: Address, job: &SignJob) -> Result<Vec<u8>, String> {
     if job.tx.from != me {
         return Err(format!("job is for {}, not this device ({me})", job.tx.from));
     }
-    let tx = TxLegacy {
-        chain_id: Some(job.chain_id),
-        nonce: job.tx.nonce,
-        gas_price: job.tx.gas_price,
-        gas_limit: job.tx.gas_limit,
-        to: TxKind::Call(job.tx.to),
-        value: job.tx.value,
-        input: job.tx.data.clone(),
+    let t = &job.tx;
+    let sign_hash = |hash: B256| -> Result<Signature, String> {
+        let (sig, recid) = key.sign_prehash_recoverable(hash.as_slice()).map_err(|e| format!("sign: {e}"))?;
+        let (r, s) = sig.split_bytes();
+        Ok(Signature::from_scalars_and_parity(B256::from_slice(&r), B256::from_slice(&s), recid.is_y_odd()))
     };
-    let hash = tx.signature_hash();
-    let (sig, recid) = key.sign_prehash_recoverable(hash.as_slice()).map_err(|e| format!("sign: {e}"))?;
-    let (r, s) = sig.split_bytes();
-    let signature = Signature::from_scalars_and_parity(B256::from_slice(&r), B256::from_slice(&s), recid.is_y_odd());
-    let signed = TxEnvelope::Legacy(tx.into_signed(signature));
+    let signed = match t.max_priority_fee_per_gas {
+        None => {
+            let tx = TxLegacy {
+                chain_id: Some(job.chain_id),
+                nonce: t.nonce,
+                gas_price: t.gas_price,
+                gas_limit: t.gas_limit,
+                to: TxKind::Call(t.to),
+                value: t.value,
+                input: t.data.clone(),
+            };
+            let sig = sign_hash(tx.signature_hash())?;
+            TxEnvelope::Legacy(tx.into_signed(sig))
+        }
+        Some(tip) => {
+            if tip > t.gas_price {
+                return Err(format!("priority fee {tip} above max fee {}", t.gas_price));
+            }
+            let tx = TxEip1559 {
+                chain_id: job.chain_id,
+                nonce: t.nonce,
+                gas_limit: t.gas_limit,
+                max_fee_per_gas: t.gas_price,
+                max_priority_fee_per_gas: tip,
+                to: TxKind::Call(t.to),
+                value: t.value,
+                access_list: Default::default(),
+                input: t.data.clone(),
+            };
+            let sig = sign_hash(tx.signature_hash())?;
+            TxEnvelope::Eip1559(tx.into_signed(sig))
+        }
+    };
     Ok(signed.encoded_2718())
 }
 

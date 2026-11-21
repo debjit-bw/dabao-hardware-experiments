@@ -41,7 +41,11 @@ pub struct SimBlock {
     pub prevrandao: B256,
 }
 
+/// The transaction. `max_priority_fee_per_gas`: `None` = EIP-155 legacy at `gas_price`;
+/// `Some(tip)` = EIP-1559 with `gas_price` as `max_fee_per_gas` (and an empty access list).
+/// The trailing option keeps legacy encodings (and the fixtures) valid.
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+#[rlp(trailing)]
 pub struct SimTx {
     pub from: Address,
     pub to: Address,
@@ -50,6 +54,17 @@ pub struct SimTx {
     pub gas_price: u128,
     pub value: U256,
     pub data: Bytes,
+    pub max_priority_fee_per_gas: Option<u128>,
+}
+
+impl SimTx {
+    /// What one unit of gas costs the sender in a block with `basefee`.
+    pub fn effective_gas_price(&self, basefee: u64) -> u128 {
+        match self.max_priority_fee_per_gas {
+            None => self.gas_price,
+            Some(tip) => self.gas_price.min(basefee as u128 + tip),
+        }
+    }
 }
 
 /// Result of a simulation, as returned by the verifier. `error` non-empty means the input
@@ -82,6 +97,8 @@ pub struct ClearSign {
     pub fields: Vec<ShownField>,
     /// Human-readable reasons not to sign (empty: every effect is explained).
     pub violations: Vec<Bytes>,
+    /// Things the user should know that don't block signing (e.g. no slippage protection).
+    pub warnings: Vec<Bytes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
@@ -178,8 +195,8 @@ pub struct SlotChange {
 }
 
 /// Verifier -> signer: a transaction the verifier simulated and approved. The signer builds
-/// and signs exactly this (EIP-155 legacy, `gas_price` as simulated); it never signs a hash
-/// it didn't compute itself.
+/// and signs exactly this (EIP-155 legacy or EIP-1559, fees as simulated); it never signs a
+/// hash it didn't compute itself.
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
 pub struct SignJob {
     pub chain_id: u64,
@@ -192,7 +209,7 @@ pub struct SignResult {
     pub sim: SimResult,
     /// Non-empty: not signed, and why (simulation error, revert, policy).
     pub refused: Bytes,
-    /// EIP-2718 encoding of the signed tx (legacy: plain RLP), ready for eth_sendRawTransaction.
+    /// EIP-2718 encoding of the signed tx (legacy: plain RLP; EIP-1559: 0x02 || RLP), ready for eth_sendRawTransaction.
     pub signed_tx: Bytes,
     /// This device's signing address.
     pub signer: Address,

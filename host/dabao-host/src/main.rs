@@ -10,12 +10,12 @@
 //!   dabao-host sign <in.rlp> [--tcp ADDR]   simulate + policy + sign; checks the signature
 //!   dabao-host address [--tcp ADDR]         the device's signing address
 //!   dabao-host status [--tcp ADDR]          heap cap, max input size
-//!   dabao-host send-tx --to ADDR [--value WEI] [--data 0x..] [--broadcast] [--chain sepolia]
+//!   dabao-host send-tx --to ADDR [--value WEI] [--data 0x..] [--legacy] [--broadcast] [--chain sepolia]
 //!                                           a tx from the device's address on a live chain:
 //!                                           build, simulate + check + sign on the device,
 //!                                           broadcast, compare the receipt with the prediction
 //!   dabao-host compile-descriptors <out.bin> <descriptor.json>...   ERC-7730 -> device blob
-//!   dabao-host build-synthetic <from> <out.rlp> [--data 0x..]   SYNTHETIC state where <from> holds 1 ETH
+//!   dabao-host build-synthetic <from> <out.rlp> [--data 0x.. | --eip1559]   SYNTHETIC state where <from> holds 1 ETH
 //!                                           (tests the sign path; not mainnet state)
 //!
 //! `build`: a WETH `transfer(0x…dEaD, 1)` from a WETH holder seen in the latest block,
@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
         }
     }
     if args.first().map(String::as_str) == Some("send-tx") {
-        let mut a = tx::Args { to: Address::ZERO, value: U256::ZERO, data: Bytes::new(), broadcast: false };
+        let mut a = tx::Args { to: Address::ZERO, value: U256::ZERO, data: Bytes::new(), broadcast: false, legacy: false };
         let mut it = args[1..].iter();
         let mut have_to = false;
         while let Some(k) = it.next() {
@@ -104,11 +104,12 @@ async fn main() -> Result<()> {
                 "--value" => a.value = it.next().context("--value WEI")?.parse()?,
                 "--data" => a.data = it.next().context("--data 0x..")?.parse()?,
                 "--broadcast" => a.broadcast = true,
+                "--legacy" => a.legacy = true,
                 other => bail!("send-tx: unknown option {other}"),
             }
         }
         if !have_to {
-            bail!("usage: dabao-host send-tx --to ADDR [--value WEI] [--data 0x..] [--broadcast] [--chain sepolia] [--tcp ADDR]");
+            bail!("usage: dabao-host send-tx --to ADDR [--value WEI] [--data 0x..] [--legacy] [--broadcast] [--chain sepolia] [--tcp ADDR]");
         }
         return tx::run(&provider()?, a, tcp).await;
     }
@@ -117,8 +118,9 @@ async fn main() -> Result<()> {
         ["build", out] => build(out).await,
         ["build", out, "--find-swap"] => replay::build(&provider()?, None, out).await,
         ["build", out, "--replay", hash] => replay::build(&provider()?, Some(hash.parse()?), out).await,
-        ["build-synthetic", from, out] => synthetic::build(from.parse()?, out, Bytes::new()),
-        ["build-synthetic", from, out, "--data", hex] => synthetic::build(from.parse()?, out, hex.parse()?),
+        ["build-synthetic", from, out] => synthetic::build(from.parse()?, out, Bytes::new(), None),
+        ["build-synthetic", from, out, "--eip1559"] => synthetic::build(from.parse()?, out, Bytes::new(), Some(1_000_000_000)),
+        ["build-synthetic", from, out, "--data", hex] => synthetic::build(from.parse()?, out, hex.parse()?, None),
         ["send", path] => send::send(&std::fs::read(path)?, tcp),
         ["send", path, "--no-precheck"] => send::send_unchecked(&std::fs::read(path)?, tcp),
         ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
@@ -238,7 +240,7 @@ async fn build(out: &str) -> Result<()> {
             beneficiary: header.beneficiary,
             prevrandao: header.mix_hash,
         },
-        tx: SimTx { from, to: WETH, nonce, gas_limit: GAS_LIMIT, gas_price: gas_price as u128, value: U256::ZERO, data },
+        tx: SimTx { from, to: WETH, nonce, gas_limit: GAS_LIMIT, gas_price: gas_price as u128, value: U256::ZERO, data, max_priority_fee_per_gas: None },
         state: state.into_iter().collect(),
         codes: codes.into_iter().collect(),
         keys: keys.into_iter().collect(),

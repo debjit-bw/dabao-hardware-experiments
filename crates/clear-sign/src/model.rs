@@ -4,12 +4,29 @@
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 
-pub const SET_VERSION: u64 = 1;
+pub const SET_VERSION: u64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
 pub struct DescriptorSet {
     pub version: u64,
     pub descriptors: Vec<Descriptor>,
+    /// Trusted token metadata (descriptors' `metadata.token` and `descriptors/tokens.json`):
+    /// the only source of tickers and decimals on the device.
+    pub tokens: Vec<Token>,
+}
+
+impl DescriptorSet {
+    pub fn token(&self, chain_id: u64, address: Address) -> Option<&Token> {
+        self.tokens.iter().find(|t| t.chain_id == chain_id && t.address == address)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct Token {
+    pub chain_id: u64,
+    pub address: Address,
+    pub ticker: Bytes,
+    pub decimals: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]

@@ -32,6 +32,8 @@ pub struct Args {
     pub value: U256,
     pub data: Bytes,
     pub broadcast: bool,
+    /// Sign an EIP-155 legacy tx instead of EIP-1559.
+    pub legacy: bool,
 }
 
 fn explorer(chain_id: u64, hash: B256) -> String {
@@ -51,19 +53,31 @@ pub async fn run(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     let ph: Header = block.header.inner.clone();
     ensure!(ph.hash_slow() == block.header.hash, "RLP header does not hash to the block hash");
     let basefee = ph.next_block_base_fee(BaseFeeParams::ethereum()).context("pre-London header")?;
-    // legacy gas price: 2 x next basefee (room for a few blocks of increases) + 1 gwei tip
-    let gas_price = 2 * basefee.max(ph.base_fee_per_gas.unwrap_or(0)) as u128 + 1_000_000_000;
+    // fee cap: 2 x next basefee (room for a few blocks of increases) + the tip. Legacy pays
+    // all of it; EIP-1559 pays basefee + tip and refunds the rest.
+    let tip: u128 = 1_000_000_000;
+    let gas_price = 2 * basefee.max(ph.base_fee_per_gas.unwrap_or(0)) as u128 + tip;
+    let priority = (!a.legacy).then_some(tip);
     let nonce = p.get_transaction_count(from).block_id(at).await?;
     let balance = p.get_balance(from).block_id(at).await?;
-    println!("device {from} on chain {chain_id}: balance {balance} wei, nonce {nonce}; block {n}, gas price {gas_price} wei");
+    println!(
+        "device {from} on chain {chain_id}: balance {balance} wei, nonce {nonce}; block {n}; {}",
+        match priority {
+            None => format!("legacy, gas price {gas_price} wei"),
+            Some(t) => format!("EIP-1559, max fee {gas_price} wei, tip {t} wei"),
+        }
+    );
 
     let mut req = TransactionRequest::default()
         .with_from(from)
         .with_to(a.to)
         .with_value(a.value)
         .with_input(a.data.clone())
-        .with_nonce(nonce)
-        .with_gas_price(gas_price);
+        .with_nonce(nonce);
+    req = match priority {
+        None => req.with_gas_price(gas_price),
+        Some(t) => req.with_max_fee_per_gas(gas_price).with_max_priority_fee_per_gas(t),
+    };
     let gas_limit = match p.estimate_gas(req.clone()).block(at).await {
         Ok(g) => g + g / 4 + 5_000,
         Err(e) => {
@@ -96,7 +110,7 @@ pub async fn run(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
             beneficiary: ph.beneficiary,
             prevrandao: ph.mix_hash,
         },
-        tx: SimTx { from, to: a.to, nonce, gas_limit, gas_price, value: a.value, data: a.data },
+        tx: SimTx { from, to: a.to, nonce, gas_limit, gas_price, value: a.value, data: a.data, max_priority_fee_per_gas: priority },
         state,
         codes,
         keys,

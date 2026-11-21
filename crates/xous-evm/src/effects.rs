@@ -173,10 +173,11 @@ pub fn effects(tx: &SimTx, block: &SimBlock, r: &SimResult) -> Vec<Effect> {
     let z = Address::ZERO;
     let mut out = Vec::new();
 
-    // gas: the sender pays gas_used * gas_price; the block beneficiary receives the tip
+    // gas: the sender pays gas_used * effective price; the block beneficiary receives the tip
     let gas = U256::from(r.gas_used);
-    let fee = gas * U256::from(tx.gas_price);
-    let tip = gas * U256::from(tx.gas_price.saturating_sub(block.basefee as u128));
+    let price = tx.effective_gas_price(block.basefee);
+    let fee = gas * U256::from(price);
+    let tip = gas * U256::from(price.saturating_sub(block.basefee as u128));
     out.push(fx(effect::GAS_FEE, z, tx.from, z, fee, Bytes::new()));
 
     // ETH moves: per-account balance delta, net of the fee (sender) and the tip (beneficiary)
@@ -232,7 +233,7 @@ mod tests {
     const COINBASE: Address = address!("0x00000000000000000000000000000000000000ee");
 
     fn tx(value: u64) -> SimTx {
-        SimTx { from: A, to: T, nonce: 0, gas_limit: 100_000, gas_price: 12, value: U256::from(value), data: Bytes::new() }
+        SimTx { from: A, to: T, nonce: 0, gas_limit: 100_000, gas_price: 12, value: U256::from(value), data: Bytes::new(), max_priority_fee_per_gas: None }
     }
     fn block() -> SimBlock {
         SimBlock { number: 1, timestamp: 1, basefee: 10, gas_limit: 30_000_000, beneficiary: COINBASE, prevrandao: B256::ZERO }

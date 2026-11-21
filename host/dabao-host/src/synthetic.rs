@@ -12,7 +12,8 @@ use sim_types::{SimBlock, SimInput, SimTx};
 const RECIPIENT: Address = address!("0x000000000000000000000000000000000000bEEF");
 const BENEFICIARY: Address = address!("0x4838B106FCe9647Bdf1E7877BF73cE8B0BAD5f97");
 
-pub fn build(from: Address, out: &str, data: Bytes) -> Result<()> {
+/// `tip`: `Some` = EIP-1559 (fee cap 3x basefee, this priority fee), `None` = legacy at basefee.
+pub fn build(from: Address, out: &str, data: Bytes, tip: Option<u128>) -> Result<()> {
     let funded = TrieAccount {
         nonce: 0,
         balance: U256::from(10u128.pow(18)),
@@ -52,9 +53,10 @@ pub fn build(from: Address, out: &str, data: Bytes) -> Result<()> {
             to: RECIPIENT,
             nonce: 0,
             gas_limit: if data.is_empty() { 21_000 } else { 100_000 },
-            gas_price: basefee as u128,
+            gas_price: if tip.is_some() { 3 * basefee as u128 } else { basefee as u128 },
             value: U256::from(10u128.pow(16)), // 0.01 ETH
             data: data.clone(),
+            max_priority_fee_per_gas: tip,
         },
         state,
         codes: vec![],

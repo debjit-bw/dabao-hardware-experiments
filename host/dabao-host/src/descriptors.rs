@@ -1,5 +1,7 @@
-//! `dabao-host compile-descriptors <out.bin> <descriptor.json>...`: compile ERC-7730 calldata
-//! descriptors into the device's compact RLP form (`clear_sign::model`).
+//! `dabao-host compile-descriptors <out.bin> [--tokens tokens.json] <descriptor.json>...`:
+//! compile ERC-7730 calldata descriptors into the device's compact RLP form
+//! (`clear_sign::model`), with the trusted token list: each descriptor's `metadata.token`
+//! (for its own deployments) plus the `--tokens` file.
 //!
 //! Supported subset (anything else is a hard error, never silently dropped): `context.$id`,
 //! `context.contract.deployments`; `display.formats` keyed by human-readable function
@@ -11,8 +13,8 @@
 
 use alloy::json_abi::{Function, Param};
 use alloy_primitives::{Address, Bytes, U256};
-use anyhow::{Context, Result, bail};
-use clear_sign::model::{Deployment, Descriptor, DescriptorSet, Field, Function as Fmt, Path, SET_VERSION, format, root, step};
+use anyhow::{Context, Result, bail, ensure};
+use clear_sign::model::{Deployment, Descriptor, DescriptorSet, Field, Function as Fmt, Path, SET_VERSION, Token, format, root, step};
 use serde_json::Value;
 
 /// Parse an ERC-7730 format key: `name(type name, (type name, ...) name, type[] name, ...)`.
@@ -204,7 +206,7 @@ fn fields(list: &[Value], prefix: &str, inputs: &[Param], out: &mut Vec<Field>) 
     Ok(())
 }
 
-fn compile_one(path_: &str) -> Result<Descriptor> {
+fn compile_one(path_: &str, tokens: &mut Vec<Token>) -> Result<Descriptor> {
     let j: Value = serde_json::from_str(&std::fs::read_to_string(path_)?).with_context(|| format!("{path_}: JSON"))?;
     if j.get("includes").is_some() {
         bail!("{path_}: `includes` not supported");
@@ -223,6 +225,11 @@ fn compile_one(path_: &str) -> Result<Descriptor> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    if let Some(t) = j.pointer("/metadata/token") {
+        for d in &deployments {
+            add_token(tokens, token_of(t, d.chain_id, d.address).with_context(|| format!("{path_}: metadata.token"))?)?;
+        }
+    }
     let formats = j.pointer("/display/formats").and_then(|f| f.as_object()).context("display.formats missing")?;
     let mut functions = Vec::new();
     for (key, fmt) in formats {
@@ -252,10 +259,45 @@ fn compile_one(path_: &str) -> Result<Descriptor> {
     })
 }
 
+fn token_of(t: &Value, chain_id: u64, address: Address) -> Result<Token> {
+    let ticker = str_of(t.get("ticker").context("ticker")?, "ticker")?;
+    let decimals = t.get("decimals").and_then(|d| d.as_u64()).context("decimals")?;
+    ensure!(decimals <= 77 && !ticker.is_empty() && ticker.len() <= 16, "implausible token metadata {ticker} / {decimals}");
+    Ok(Token { chain_id, address, ticker: ticker.as_bytes().to_vec().into(), decimals: decimals as u8 })
+}
+
+/// Add `t`, refusing a second, different entry for the same (chain, address).
+fn add_token(tokens: &mut Vec<Token>, t: Token) -> Result<()> {
+    match tokens.iter().find(|x| x.chain_id == t.chain_id && x.address == t.address) {
+        Some(x) if *x == t => Ok(()),
+        Some(x) => bail!("conflicting metadata for token {} on chain {}: {x:?} vs {t:?}", t.address, t.chain_id),
+        None => {
+            tokens.push(t);
+            Ok(())
+        }
+    }
+}
+
+fn token_list(path_: &str, tokens: &mut Vec<Token>) -> Result<()> {
+    let j: Value = serde_json::from_str(&std::fs::read_to_string(path_)?).with_context(|| format!("{path_}: JSON"))?;
+    for t in j.get("tokens").and_then(|t| t.as_array()).context("tokens: expected a list")? {
+        let chain_id = t.get("chainId").and_then(|c| c.as_u64()).context("chainId")?;
+        let address = str_of(t.get("address").context("address")?, "address")?.parse()?;
+        add_token(tokens, token_of(t, chain_id, address).with_context(|| format!("{path_}: {address}"))?)?;
+    }
+    Ok(())
+}
+
 pub fn compile(out: &str, inputs: &[String]) -> Result<()> {
-    let mut set = DescriptorSet { version: SET_VERSION, descriptors: vec![] };
-    for p in inputs {
-        let d = compile_one(p)?;
+    let mut set = DescriptorSet { version: SET_VERSION, descriptors: vec![], tokens: vec![] };
+    let mut files = inputs.iter();
+    while let Some(p) = files.next() {
+        if p == "--tokens" {
+            let f = files.next().context("--tokens needs a file")?;
+            token_list(f, &mut set.tokens)?;
+            continue;
+        }
+        let d = compile_one(p, &mut set.tokens)?;
         println!(
             "{p}: '{}' at {} deployment(s), {} format(s): {}",
             String::from_utf8_lossy(&d.id),
@@ -268,6 +310,9 @@ pub fn compile(out: &str, inputs: &[String]) -> Result<()> {
                 .join(", ")
         );
         set.descriptors.push(d);
+    }
+    for t in &set.tokens {
+        println!("token: chain {} {} {} ({} decimals)", t.chain_id, t.address, String::from_utf8_lossy(&t.ticker), t.decimals);
     }
     let bytes = alloy_rlp::encode(&set);
     std::fs::write(out, &bytes)?;

@@ -13,12 +13,52 @@
 //!      allowances must also be covered by a shown amount of that token;
 //!    * nothing unexplained: any `UNEXPLAINED_STORAGE` is a violation;
 //!    * a reverting transaction is a violation (nothing to sign).
+//! 4. Warnings (shown, not blocking): a shown amount of an asset the sender receives that is 0
+//!    (a swap with no slippage protection) or under half the simulated amount.
+//!
+//! Amounts are displayed with decimals and tickers only for tokens in the firmware's trusted
+//! token list ([`DescriptorSet::tokens`]); anything else is shown in raw units with its address,
+//! because a token's own `symbol()` / `decimals()` are whatever its deployer chose.
 
 use alloy_dyn_abi::{DynSolType, DynSolValue};
 use alloy_primitives::{Address, Bytes, U256};
 use sim_types::{ClearSign, Effect, ShownField, SimTx, effect};
 
 use crate::model::{DescriptorSet, Field, Function, Path, format, root, step};
+
+/// `v` scaled down by `decimals`, without trailing zeros: 1500000 at 6 -> "1.5".
+pub fn format_units(v: U256, decimals: u8) -> String {
+    let s = v.to_string();
+    let d = decimals as usize;
+    if d == 0 {
+        return s;
+    }
+    let s = format!("{s:0>width$}", width = d + 1);
+    let (int, frac) = s.split_at(s.len() - d);
+    let frac = frac.trim_end_matches('0');
+    if frac.is_empty() { int.to_string() } else { format!("{int}.{frac}") }
+}
+
+/// How the device names `asset` (zero address = ETH).
+pub fn asset_label(set: &DescriptorSet, chain_id: u64, asset: Address) -> String {
+    if asset.is_zero() {
+        return "ETH".into();
+    }
+    match set.token(chain_id, asset) {
+        Some(t) => String::from_utf8_lossy(&t.ticker).to_string(),
+        None => format!("unlisted token {asset}"),
+    }
+}
+
+/// An amount of `asset` as the device displays it: decimals and ticker for ETH and listed
+/// tokens, raw units otherwise.
+pub fn format_amount(set: &DescriptorSet, chain_id: u64, asset: Address, amount: U256) -> String {
+    let decimals = if asset.is_zero() { Some(18) } else { set.token(chain_id, asset).map(|t| t.decimals) };
+    match decimals {
+        Some(d) => format!("{} {}", format_units(amount, d), asset_label(set, chain_id, asset)),
+        None => format!("{amount} raw units of {}", asset_label(set, chain_id, asset)),
+    }
+}
 
 /// `multicall` variants of Uniswap-style routers: (selector, parameter types, index of bytes[]).
 const MULTICALLS: [([u8; 4], &str, usize); 3] = [
@@ -72,16 +112,27 @@ fn resolve(p: &Path, decoded: &DynSolValue, tx: &SimTx, token_const: Address) ->
 }
 
 /// What the user is shown, in a form the rules can use.
-#[derive(Default)]
-struct Shown {
+struct Shown<'a> {
+    set: &'a DescriptorSet,
+    chain_id: u64,
     fields: Vec<ShownField>,
+    /// Shown token amounts: (index into `fields`, asset, amount), for the slippage warning.
+    token_fields: Vec<(usize, Address, U256)>,
     /// (asset, amount): zero address = ETH.
     amounts: Vec<(Address, U256)>,
     addresses: Vec<Address>,
     errors: Vec<String>,
 }
 
-impl Shown {
+impl<'a> Shown<'a> {
+    fn new(set: &'a DescriptorSet, chain_id: u64) -> Self {
+        Shown { set, chain_id, fields: vec![], token_fields: vec![], amounts: vec![], addresses: vec![], errors: vec![] }
+    }
+
+    fn amount(&self, asset: Address, amount: U256) -> String {
+        format_amount(self.set, self.chain_id, asset, amount)
+    }
+
     fn add(&mut self, label: &[u8], value: String) {
         self.fields.push(ShownField { label: label.to_vec().into(), value: value.into_bytes().into() });
     }
@@ -103,16 +154,16 @@ impl Shown {
                 };
                 let asset = if f.native_currency.contains(&token) { Address::ZERO } else { token };
                 let shown = if !f.threshold.is_zero() && amount >= f.threshold {
-                    String::from_utf8_lossy(&f.message).to_string()
+                    format!("{} {}", String::from_utf8_lossy(&f.message), asset_label(self.set, self.chain_id, asset))
                 } else {
-                    amount.to_string()
+                    self.amount(asset, amount)
                 };
-                let what = if asset.is_zero() { "ETH (wei)".to_string() } else { format!("of token {asset}") };
-                self.add(&f.label, format!("{shown} {what}"));
+                self.token_fields.push((self.fields.len(), asset, amount));
+                self.add(&f.label, shown);
                 self.amounts.push((asset, amount));
             }
             (format::AMOUNT, Val::Uint(amount)) => {
-                self.add(&f.label, format!("{amount} ETH (wei)"));
+                self.add(&f.label, self.amount(Address::ZERO, amount));
                 self.amounts.push((Address::ZERO, amount));
             }
             (format::ADDRESS_NAME, Val::Addr(a)) => {
@@ -150,11 +201,12 @@ fn show_call(f: &Function, data: &[u8], tx: &SimTx, shown: &mut Shown) -> Result
 /// Run the check for `tx` with the simulation's `effects`.
 pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effects: &[Effect]) -> ClearSign {
     let mut out = ClearSign::default();
-    let mut shown = Shown::default();
+    let mut shown = Shown::new(set, chain_id);
     let mut violations: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     if !tx.value.is_zero() {
-        shown.add(b"Value (sent with the transaction)", format!("{} ETH (wei)", tx.value));
+        shown.add(b"Value (sent with the transaction)", shown.amount(Address::ZERO, tx.value));
     }
     shown.amounts.push((Address::ZERO, tx.value)); // @.value is always shown
 
@@ -229,13 +281,12 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
         violations.push("the transaction reverts".into());
     }
     let me = tx.from;
+    let amt = |a: Address, x: U256| format_amount(set, chain_id, a, x);
     for e in effects {
-        let asset_name = |a: Address| if a.is_zero() { "ETH".to_string() } else { a.to_string() };
         match e.kind {
             effect::NET_LOSS if !shown.covers(e.contract, e.amount) => violations.push(format!(
-                "hidden loss: the sender loses {} of {}, but no shown amount of that asset covers it",
-                e.amount,
-                asset_name(e.contract)
+                "hidden loss: the sender loses {}, but no shown amount of that asset covers it",
+                amt(e.contract, e.amount)
             )),
             effect::ERC20_APPROVAL | effect::PERMIT2_APPROVAL if e.from == me && !e.amount.is_zero() => {
                 let token = if e.kind == effect::PERMIT2_APPROVAL && e.extra.len() >= 20 {
@@ -244,9 +295,9 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
                     e.contract
                 };
                 if !shown.names(e.to) {
-                    violations.push(format!("hidden approval: allowance of {} {} to {} (spender not shown)", e.amount, asset_name(token), e.to));
+                    violations.push(format!("hidden approval: allowance of {} to {} (spender not shown)", amt(token, e.amount), e.to));
                 } else if !shown.covers(token, e.amount) {
-                    violations.push(format!("hidden approval: allowance of {} {} to {} exceeds every shown amount", e.amount, asset_name(token), e.to));
+                    violations.push(format!("hidden approval: allowance of {} to {} exceeds every shown amount", amt(token, e.amount), e.to));
                 }
             }
             effect::NFT_APPROVAL | effect::APPROVAL_FOR_ALL if e.from == me && !shown.names(e.to) => {
@@ -265,7 +316,38 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
         }
     }
 
+    // what the sender ends up receiving vs the minimum the user is shown (slippage)
+    for &(i, asset, shown_amount) in &shown.token_fields {
+        let Some(gain) = effects.iter().find(|e| e.kind == effect::NET_GAIN && e.contract == asset).map(|e| e.amount) else {
+            continue;
+        };
+        if shown_amount >= gain {
+            continue; // exact output, or not a minimum
+        }
+        let label = String::from_utf8_lossy(&shown.fields[i].label).to_string();
+        let pct = (gain - shown_amount) * U256::from(10_000) / gain; // basis points below the simulation
+        let pct = format!("{}.{:02}%", pct / U256::from(100), pct % U256::from(100));
+        let note = format!(" (simulated: {}, {pct} lower)", amt(asset, gain));
+        let mut v = shown.fields[i].value.to_vec();
+        v.extend_from_slice(note.as_bytes());
+        shown.fields[i].value = v.into();
+        if shown_amount.is_zero() {
+            warnings.push(format!(
+                "'{label}' is 0: the swap accepts any price (no slippage protection; a sandwich bot can take everything above 0)"
+            ));
+        } else if shown_amount * U256::from(2) < gain {
+            warnings.push(format!("'{label}' is {pct} below the simulated amount: a loose slippage limit"));
+        }
+    }
+
+    // network fee: what the simulation paid, and the most the signed tx can pay
+    if let Some(fee) = effects.iter().find(|e| e.kind == effect::GAS_FEE && e.from == tx.from) {
+        shown.add(b"Network fee (simulated)", shown.amount(Address::ZERO, fee.amount));
+    }
+    shown.add(b"Max network fee", shown.amount(Address::ZERO, U256::from(tx.gas_limit) * U256::from(tx.gas_price)));
+
     out.fields = shown.fields;
     out.violations = violations.into_iter().map(|v| Bytes::from(v.into_bytes())).collect();
+    out.warnings = warnings.into_iter().map(|v| Bytes::from(v.into_bytes())).collect();
     out
 }

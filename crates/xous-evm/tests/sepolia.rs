@@ -54,3 +54,33 @@ fn swaps_match_chain() {
         assert!(kinds(&r).contains(&effect::POOL_SWAP));
     }
 }
+
+#[test]
+fn eip1559_pays_basefee_plus_tip_not_the_cap() {
+    // the same ETH send as an EIP-1559 tx: cap 100 gwei, tip 1 gwei. The sender must be
+    // charged gas_used * (basefee + tip), the beneficiary gets only the tip, and the ETH moved
+    // is still exactly the value (no hidden loss from the fee cap).
+    let raw = include_bytes!("../fixtures/sepolia-eth-send.rlp");
+    let mut basefee = 0u64;
+    let tip = 1_000_000_000u128;
+    let r = xous_evm::sim::simulate_with(raw, |i| {
+        basefee = i.block.basefee;
+        i.tx.gas_price = 100_000_000_000;
+        i.tx.max_priority_fee_per_gas = Some(tip);
+    })
+    .unwrap();
+    assert!(r.success);
+    let fee = r.effects.iter().find(|e| e.kind == effect::GAS_FEE).unwrap();
+    assert_eq!(fee.amount, alloy_primitives::U256::from(21_000u128 * (basefee as u128 + tip)));
+    let net = r.effects.iter().find(|e| e.kind == effect::NET_LOSS).unwrap();
+    assert_eq!(net.amount, alloy_primitives::U256::from(10u64.pow(15)), "0.001 ETH, gas excluded");
+    assert!(!kinds(&r).contains(&effect::UNEXPLAINED_STORAGE));
+
+    // and the RLP stays compatible: the legacy fixture decodes with no tip
+    let legacy: sim_types::SimInput = alloy_rlp::Decodable::decode(&mut &raw[..]).unwrap();
+    assert_eq!(legacy.tx.max_priority_fee_per_gas, None);
+    let mut t = legacy.tx.clone();
+    t.max_priority_fee_per_gas = Some(tip);
+    let back: sim_types::SimTx = alloy_rlp::Decodable::decode(&mut &alloy_rlp::encode(&t)[..]).unwrap();
+    assert_eq!(back, t);
+}

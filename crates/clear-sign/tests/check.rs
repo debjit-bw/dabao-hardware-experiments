@@ -16,7 +16,8 @@ fn run(fixture: &[u8]) -> (SimInput, ClearSign) {
 fn show(c: &ClearSign) -> String {
     let f: Vec<String> = c.fields.iter().map(|f| format!("{}={}", String::from_utf8_lossy(&f.label), String::from_utf8_lossy(&f.value))).collect();
     let v: Vec<String> = c.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
-    format!("[{}] intent '{}' fields {f:?} violations {v:?}", String::from_utf8_lossy(&c.descriptor), String::from_utf8_lossy(&c.intent))
+    let w: Vec<String> = c.warnings.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
+    format!("[{}] intent '{}' fields {f:?} violations {v:?} warnings {w:?}", String::from_utf8_lossy(&c.descriptor), String::from_utf8_lossy(&c.intent))
 }
 
 #[test]
@@ -35,6 +36,26 @@ fn swap_exact_input_single_passes() {
     eprintln!("{}", show(&c));
     assert_eq!(c.descriptor.as_ref(), b"Uniswap v3 Router 2");
     assert!(c.violations.is_empty(), "{}", show(&c));
+    // this real mainnet swap set amountOutMinimum = 0: signable, but warned about
+    assert_eq!(c.warnings.len(), 1, "{}", show(&c));
+    assert!(String::from_utf8_lossy(&c.warnings[0]).starts_with("'Minimum to Receive' is 0"), "{}", show(&c));
+}
+
+#[test]
+fn amounts_use_the_trusted_token_list() {
+    use clear_sign::check::format_units;
+    assert_eq!(format_units(U256::from(1_500_000u64), 6), "1.5");
+    assert_eq!(format_units(U256::from(252u64), 6), "0.000252");
+    assert_eq!(format_units(U256::from(10u64).pow(U256::from(18)), 18), "1");
+    assert_eq!(format_units(U256::ZERO, 18), "0");
+    assert_eq!(format_units(U256::from(123u64), 0), "123");
+    let set = clear_sign::builtin();
+    let usdc = address!("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
+    let f = |chain, a| clear_sign::check::format_amount(&set, chain, a, U256::from(2_500_000u64));
+    assert_eq!(f(1, usdc), "2.5 USDC");
+    assert_eq!(f(1, Address::ZERO), "0.0000000000025 ETH");
+    // the same address on another chain is not that token
+    assert_eq!(f(11155111, usdc), format!("2500000 raw units of unlisted token {usdc}"));
 }
 
 #[test]
@@ -50,7 +71,7 @@ fn swap_inside_multicall_passes() {
 // ---- crafted cases: what the display must not hide ------------------------------------------
 
 fn tx(to: Address, data: Vec<u8>, value: u64) -> SimTx {
-    SimTx { from: address!("0x00000000000000000000000000000000000000aa"), to, nonce: 0, gas_limit: 100_000, gas_price: 1, value: U256::from(value), data: data.into() }
+    SimTx { from: address!("0x00000000000000000000000000000000000000aa"), to, nonce: 0, gas_limit: 100_000, gas_price: 1, value: U256::from(value), data: data.into(), max_priority_fee_per_gas: None }
 }
 fn fx(kind: u8, contract: Address, from: Address, to: Address, amount: u64) -> Effect {
     Effect { kind, contract, from, to, amount: U256::from(amount), extra: Bytes::new() }
@@ -168,6 +189,7 @@ fn sepolia_swaps_signed_by_the_board_pass() {
         let (_, c) = run(f);
         assert!(c.violations.is_empty(), "{name}: {}", show(&c));
         assert_eq!(String::from_utf8_lossy(&c.intent), intent, "{name}");
-        assert!(show(&c).contains("Minimum to Receive=252"), "{name}: {}", show(&c));
+        assert!(show(&c).contains("Minimum to Receive=0.000252 USDC (simulated: 0.000281 USDC, 10.32% lower)"), "{name}: {}", show(&c));
+        assert!(c.warnings.is_empty(), "{name}: 90% of the quote is not a loose limit");
     }
 }

@@ -103,6 +103,8 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         .nonce(t.nonce)
         .gas_limit(t.gas_limit)
         .gas_price(t.gas_price)
+        .gas_priority_fee(t.max_priority_fee_per_gas)
+        .tx_type(Some(if t.max_priority_fee_per_gas.is_some() { 2 } else { 0 }))
         .value(t.value)
         .data(t.data.clone())
         .chain_id(Some(input.chain_id))
