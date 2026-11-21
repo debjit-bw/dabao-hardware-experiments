@@ -10,6 +10,10 @@
 //!   dabao-host sign <in.rlp> [--tcp ADDR]   simulate + policy + sign; checks the signature
 //!   dabao-host address [--tcp ADDR]         the device's signing address
 //!   dabao-host status [--tcp ADDR]          heap cap, max input size
+//!   dabao-host send-tx --to ADDR [--value WEI] [--data 0x..] [--broadcast] [--chain sepolia]
+//!                                           a tx from the device's address on a live chain:
+//!                                           build, simulate + check + sign on the device,
+//!                                           broadcast, compare the receipt with the prediction
 //!   dabao-host compile-descriptors <out.bin> <descriptor.json>...   ERC-7730 -> device blob
 //!   dabao-host build-synthetic <from> <out.rlp> [--data 0x..]   SYNTHETIC state where <from> holds 1 ETH
 //!                                           (tests the sign path; not mainnet state)
@@ -59,6 +63,7 @@ mod descriptors;
 mod replay;
 mod send;
 mod synthetic;
+mod tx;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -72,6 +77,41 @@ async fn main() -> Result<()> {
         None => None,
     };
     let tcp = tcp.as_deref();
+    // --chain sepolia: default RPC for Sepolia (publicnode, free, serves proofs)
+    if let Some(i) = args.iter().position(|a| a == "--chain") {
+        let c = args.get(i + 1).context("--chain needs a name")?.clone();
+        args.drain(i..i + 2);
+        if std::env::var_os("RPC_URL").is_none() {
+            let url = match c.as_str() {
+                "sepolia" => "https://ethereum-sepolia-rpc.publicnode.com",
+                "mainnet" => "https://ethereum-rpc.publicnode.com",
+                other => bail!("unknown chain '{other}' (mainnet, sepolia)"),
+            };
+            // safety: single-threaded at this point (before any RPC client exists)
+            unsafe { std::env::set_var("RPC_URL", url) };
+        }
+    }
+    if args.first().map(String::as_str) == Some("send-tx") {
+        let mut a = tx::Args { to: Address::ZERO, value: U256::ZERO, data: Bytes::new(), broadcast: false };
+        let mut it = args[1..].iter();
+        let mut have_to = false;
+        while let Some(k) = it.next() {
+            match k.as_str() {
+                "--to" => {
+                    a.to = it.next().context("--to ADDR")?.parse()?;
+                    have_to = true;
+                }
+                "--value" => a.value = it.next().context("--value WEI")?.parse()?,
+                "--data" => a.data = it.next().context("--data 0x..")?.parse()?,
+                "--broadcast" => a.broadcast = true,
+                other => bail!("send-tx: unknown option {other}"),
+            }
+        }
+        if !have_to {
+            bail!("usage: dabao-host send-tx --to ADDR [--value WEI] [--data 0x..] [--broadcast] [--chain sepolia] [--tcp ADDR]");
+        }
+        return tx::run(&provider()?, a, tcp).await;
+    }
     let usage = "usage: dabao-host build <out.rlp> [--replay TXHASH | --find-swap] | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address | status  [--tcp ADDR]";
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["build", out] => build(out).await,

@@ -79,7 +79,7 @@ static DESCRIPTORS: std::sync::LazyLock<clear_sign::model::DescriptorSet> = std:
 
 /// The signing policy: sign only if the simulation succeeded, the ERC-7730 check matched a
 /// descriptor and found every effect explained by what the user is shown, and the tx is sent
-/// from this device's address on mainnet (the only chain the simulator's spec covers).
+/// from this device's address on a chain the simulator has a spec for (mainnet, Sepolia).
 fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), String> {
     if !sim.error.is_empty() {
         return Err(format!("simulation rejected the input: {}", String::from_utf8_lossy(&sim.error)));
@@ -95,8 +95,8 @@ fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), Str
     if input.tx.from != signer {
         return Err(format!("tx is from {}, not this device ({signer})", input.tx.from));
     }
-    if input.chain_id != 1 {
-        return Err(format!("chain {} not supported (mainnet only)", input.chain_id));
+    if !matches!(input.chain_id, 1 | 11155111) {
+        return Err(format!("chain {} not supported (mainnet and Sepolia only)", input.chain_id));
     }
     Ok(())
 }

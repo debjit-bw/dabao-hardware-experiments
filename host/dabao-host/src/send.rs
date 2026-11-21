@@ -95,6 +95,11 @@ pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
 
 /// Ask the device to simulate and sign; independently check what comes back.
 pub fn sign(input: &[u8], tcp: Option<&str>) -> Result<()> {
+    sign_checked(input, tcp).map(|_| ())
+}
+
+/// `sign`, returning the device's simulation and the verified signed tx (if it signed).
+pub fn sign_checked(input: &[u8], tcp: Option<&str>) -> Result<(SimResult, Option<Vec<u8>>)> {
     let req: SimInput = alloy_rlp::Decodable::decode(&mut &input[..]).context("decode SimInput")?;
     precheck(input, tcp)?;
     let (msg, rtt) = exchange(wire::TYPE_SIGN, input, wire::TYPE_SIGN, tcp)?;
@@ -109,7 +114,7 @@ pub fn sign(input: &[u8], tcp: Option<&str>) -> Result<()> {
     print_sim(&r.sim);
     if !r.refused.is_empty() {
         println!("NOT SIGNED: {}", String::from_utf8_lossy(&r.refused));
-        return Ok(());
+        return Ok((r.sim, None));
     }
     // Don't trust the device's word either: decode, recover, compare with what we asked for.
     let tx = TxEnvelope::decode_2718(&mut &r.signed_tx[..]).context("decode signed tx")?;
@@ -133,7 +138,7 @@ pub fn sign(input: &[u8], tcp: Option<&str>) -> Result<()> {
         bail!("the signed transaction does not match the request");
     }
     println!("SIGNED ({} B, tx hash {}): 0x{}", r.signed_tx.len(), tx.tx_hash(), alloy_primitives::hex::encode(&r.signed_tx));
-    Ok(())
+    Ok((r.sim, Some(r.signed_tx.to_vec())))
 }
 
 /// One line per effect, e.g. "ERC20_TRANSFER  0xccc… 13403325392869447809: 0x08a1… -> 0x8fb0…".

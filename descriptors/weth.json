@@ -3,7 +3,10 @@
   "context": {
     "$id": "WETH9 (dabao-hackathon)",
     "contract": {
-      "deployments": [{ "chainId": 1, "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" }]
+      "deployments": [
+        { "chainId": 1, "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" },
+        { "chainId": 11155111, "address": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" }
+      ]
     }
   },
   "metadata": {
@@ -20,13 +23,13 @@
       "withdraw(uint256 wad)": {
         "intent": "Unwrap WETH",
         "fields": [
-          { "path": "wad", "label": "Amount", "format": "tokenAmount", "params": { "token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" } }
+          { "path": "wad", "label": "Amount", "format": "tokenAmount", "params": { "tokenPath": "@.to" } }
         ]
       },
       "transfer(address dst, uint256 wad)": {
         "intent": "Send",
         "fields": [
-          { "path": "wad", "label": "Amount", "format": "tokenAmount", "params": { "token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" } },
+          { "path": "wad", "label": "Amount", "format": "tokenAmount", "params": { "tokenPath": "@.to" } },
           { "path": "dst", "label": "To", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] } }
         ]
       },
@@ -39,7 +42,7 @@
             "label": "Amount",
             "format": "tokenAmount",
             "params": {
-              "token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+              "tokenPath": "@.to",
               "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
               "message": "Unlimited"
             }

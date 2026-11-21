@@ -84,7 +84,7 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         block_hashes: BTreeMap::from([(parent.number, parent.hash_slow())]),
     };
 
-    let spec = crate::chainspec::mainnet_no_alloc();
+    let spec = crate::chainspec::spec_for(input.chain_id).ok_or_else(|| format!("chain {} not supported", input.chain_id))?;
     let spec_id = alloy_evm::spec_by_timestamp_and_block_number(&*spec, input.block.timestamp, input.block.number);
     let b = &input.block;
     let block = BlockEnv {

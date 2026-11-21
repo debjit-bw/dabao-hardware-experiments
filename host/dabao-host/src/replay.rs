@@ -110,7 +110,7 @@ async fn build_one(p: &impl Provider, hash: B256, out: &str) -> Result<()> {
 }
 
 /// Collect proofs for every account / slot the access list names, plus `extra` accounts.
-async fn witness(
+pub(crate) async fn witness(
     p: &impl Provider,
     at: BlockId,
     req: &TransactionRequest,
@@ -120,11 +120,21 @@ async fn witness(
     if let Some(e) = &al.error {
         bail!("the same call fails: {e} (the sender may have no more input tokens / allowance)");
     }
+    witness_for(p, at, &al.access_list, extra).await
+}
+
+/// Proofs for `extra` accounts and everything in `al`.
+pub(crate) async fn witness_for(
+    p: &impl Provider,
+    at: BlockId,
+    al: &alloy::eips::eip2930::AccessList,
+    extra: &[Address],
+) -> Result<(Vec<Bytes>, Vec<Bytes>, Vec<Bytes>, usize, usize)> {
     let mut touched: BTreeMap<Address, BTreeSet<B256>> = BTreeMap::new();
     for a in extra {
         touched.entry(*a).or_default();
     }
-    for item in al.access_list.0.iter() {
+    for item in al.0.iter() {
         touched.entry(item.address).or_default().extend(item.storage_keys.iter().copied());
     }
     let (mut state, mut codes, mut keys) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
