@@ -2,6 +2,9 @@
 //!
 //!   dabao-host build <out.rlp>              build a SimInput from a JSON-RPC node (RPC_URL,
 //!                                           default publicnode): WETH transfer(0x…dEaD, 1)
+//!   dabao-host build <out.rlp> --replay <txhash> | --find-swap
+//!                                           re-simulate a real mainnet tx (e.g. the latest
+//!                                           Uniswap v2/v3 swap) on its parent block's state
 //!   dabao-host send <in.rlp> [--tcp ADDR]   simulate on the device (USB HID) or the emulator
 //!                                           (TCP, e.g. 127.0.0.1:7610); print the SimResult
 //!   dabao-host sign <in.rlp> [--tcp ADDR]   simulate + policy + sign; checks the signature
@@ -50,6 +53,7 @@ fn balance_of_calldata(who: Address) -> Bytes {
     d.into()
 }
 
+mod replay;
 mod send;
 mod synthetic;
 
@@ -65,9 +69,11 @@ async fn main() -> Result<()> {
         None => None,
     };
     let tcp = tcp.as_deref();
-    let usage = "usage: dabao-host build <out.rlp> | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address  [--tcp ADDR]";
+    let usage = "usage: dabao-host build <out.rlp> [--replay TXHASH | --find-swap] | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address  [--tcp ADDR]";
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["build", out] => build(out).await,
+        ["build", out, "--find-swap"] => replay::build(&provider()?, None, out).await,
+        ["build", out, "--replay", hash] => replay::build(&provider()?, Some(hash.parse()?), out).await,
         ["build-synthetic", from, out] => synthetic::build(from.parse()?, out),
         ["send", path] => send::send(&std::fs::read(path)?, tcp),
         ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
@@ -77,6 +83,11 @@ async fn main() -> Result<()> {
         }
         _ => bail!("{usage}"),
     }
+}
+
+fn provider() -> Result<impl Provider> {
+    let url = std::env::var("RPC_URL").unwrap_or_else(|_| "https://ethereum-rpc.publicnode.com".into());
+    Ok(ProviderBuilder::new().connect_http(url.parse()?))
 }
 
 async fn build(out: &str) -> Result<()> {

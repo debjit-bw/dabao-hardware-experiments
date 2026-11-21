@@ -101,12 +101,57 @@ pub fn sign(input: &[u8], tcp: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// One line per effect, e.g. "ERC20_TRANSFER  0xccc… 13403325392869447809: 0x08a1… -> 0x8fb0…".
+fn describe(e: &sim_types::Effect) -> String {
+    use sim_types::effect as k;
+    let name = match e.kind {
+        k::NATIVE_OUT => "ETH out",
+        k::NATIVE_IN => "ETH in",
+        k::GAS_FEE => "gas fee",
+        k::ERC20_TRANSFER => "ERC20 transfer",
+        k::ERC20_APPROVAL => "ERC20 APPROVAL",
+        k::NFT_TRANSFER => "NFT transfer",
+        k::NFT_APPROVAL => "NFT APPROVAL",
+        k::APPROVAL_FOR_ALL => "APPROVAL FOR ALL",
+        k::ERC1155_TRANSFER => "ERC1155 transfer",
+        k::PERMIT2_APPROVAL => "PERMIT2 APPROVAL",
+        k::OWNERSHIP_TRANSFER => "OWNERSHIP CHANGE",
+        k::PROXY_UPGRADE => "PROXY UPGRADE",
+        k::PROXY_ADMIN_CHANGE => "PROXY ADMIN CHANGE",
+        k::UNEXPLAINED_STORAGE => "UNEXPLAINED STORAGE",
+        k::WRAP => "wrap",
+        k::UNWRAP => "unwrap",
+        k::POOL_SWAP => "pool swap",
+        k::NET_GAIN => "sender NET +",
+        k::NET_LOSS => "sender NET -",
+        _ => "unknown kind",
+    };
+    let asset = if e.contract.is_zero() { "ETH".to_string() } else { e.contract.to_string() };
+    match e.kind {
+        k::NATIVE_OUT | k::GAS_FEE => format!("{name:<20} {} wei from {}", e.amount, e.from),
+        k::NATIVE_IN => format!("{name:<20} {} wei to {}", e.amount, e.to),
+        k::NET_GAIN | k::NET_LOSS => format!("{name:<20} {} {asset}", e.amount),
+        k::UNEXPLAINED_STORAGE => format!("{name:<20} {asset}: {} slots changed, no recognised event", e.amount),
+        k::POOL_SWAP | k::OWNERSHIP_TRANSFER | k::PROXY_UPGRADE | k::PROXY_ADMIN_CHANGE => {
+            format!("{name:<20} {asset}: {} -> {}", e.from, e.to)
+        }
+        _ => format!("{name:<20} {asset} {}: {} -> {}", e.amount, e.from, e.to),
+    }
+}
+
 fn print_sim(r: &SimResult) {
     if !r.error.is_empty() {
         println!("REJECTED: {}", String::from_utf8_lossy(&r.error));
         return;
     }
     println!("success={} gas_used={} output={}", r.success, r.gas_used, r.output);
+    println!("effects ({}):", r.effects.len());
+    for e in &r.effects {
+        println!("  {}", describe(e));
+    }
+    if std::env::var_os("DABAO_VERBOSE").is_none() {
+        return; // raw logs and state changes only with DABAO_VERBOSE=1
+    }
     for l in &r.logs {
         println!("  log {} topics={:?} data={}", l.address, l.topics, l.data);
     }

@@ -25,6 +25,16 @@ fn weth_transfer_effects() {
     let delta: Vec<_> = weth.slots.iter().map(|s| (s.before, s.after)).collect();
     assert!(delta.iter().any(|(b, a)| *a + U256::from(1) == *b));
     assert!(delta.iter().any(|(b, a)| *b + U256::from(1) == *a));
+
+    // effects: the gas fee, one ERC-20 transfer of 1 unit to 0x..dEaD, and the sender's net
+    // loss of 1 WETH; nothing unexplained (WETH's writes are explained by its Transfer event)
+    use sim_types::effect;
+    let kinds: Vec<u8> = r.effects.iter().map(|e| e.kind).collect();
+    assert_eq!(kinds, vec![effect::GAS_FEE, effect::ERC20_TRANSFER, effect::NET_LOSS]);
+    let t = &r.effects[1];
+    assert_eq!((t.contract, t.to, t.amount), (WETH, address!("0x000000000000000000000000000000000000dEaD"), U256::from(1)));
+    let n = &r.effects[2];
+    assert_eq!((n.contract, n.amount), (WETH, U256::from(1)));
 }
 
 #[test]

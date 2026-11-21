@@ -148,7 +148,7 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         .iter()
         .map(|l| SimLog { address: l.address, topics: l.topics().to_vec(), data: l.data.data.clone() })
         .collect();
-    Ok(SimResult {
+    let mut r = SimResult {
         error: Bytes::new(),
         success: out.result.is_success(),
         gas_used: out.result.tx_gas_used(),
@@ -157,5 +157,8 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         changes,
         micros: 0,
         peak_heap: 0,
-    })
+        effects: Vec::new(),
+    };
+    r.effects = crate::effects::effects(&input.tx, &input.block, &r);
+    Ok(r)
 }

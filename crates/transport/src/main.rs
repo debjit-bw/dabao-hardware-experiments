@@ -23,6 +23,20 @@ impl Verifier {
         self.call(ipc::OP_SIMULATE, input)
     }
 
+    /// Lend `buf` (holding `len` bytes of request, room for the reply) with `op`; returns the
+    /// reply bytes and unmaps `buf`. Used by the device path, which reassembles the frame
+    /// straight into the lend buffer (no heap copy: RAM is tight).
+    fn call_mapped(&self, op: usize, buf: xous::MemoryRange, len: usize) -> Result<Vec<u8>, String> {
+        let cap = buf.len();
+        let r = xous::send_message(self.0, xous::Message::new_lend_mut(op, buf, None, xous::MemorySize::new(len)));
+        let out = match r {
+            Ok(xous::Result::MemoryReturned(_, Some(valid))) => Ok(unsafe { buf.as_slice::<u8>()[..valid.get().min(cap)].to_vec() }),
+            other => Err(format!("verifier IPC failed: {other:?}")),
+        };
+        xous::unmap_memory(buf).ok();
+        out
+    }
+
     /// Lend `input` (plus room for the reply) with `op`; returns the verifier's reply bytes.
     fn call(&self, op: usize, input: &[u8]) -> Result<Vec<u8>, String> {
         // room for the reply too (logs and state changes), page-rounded
@@ -122,11 +136,19 @@ fn serve(verifier: &Verifier) -> ! {
     }
 }
 
+/// A frame being received: the lend buffer it is reassembled into (page-rounded, with room for
+/// the reply), the `type || message` length, and how many of those bytes have arrived.
+#[cfg(target_os = "xous")]
+struct Incoming {
+    buf: xous::MemoryRange,
+    need: usize,
+    have: usize,
+}
+
 #[cfg(target_os = "xous")]
 fn serve(verifier: &Verifier) -> ! {
     let usb = usb_bao1x::UsbHid::new();
-    let mut buf: Vec<u8> = Vec::new();
-    let mut need: Option<usize> = None;
+    let mut cur: Option<Incoming> = None;
     loop {
         let report = match usb.hid_wait_incoming() {
             Ok(r) => r,
@@ -136,24 +158,57 @@ fn serve(verifier: &Verifier) -> ! {
                 continue;
             }
         };
-        buf.extend_from_slice(&report);
-        if need.is_none() {
-            need = wire::frame_len([buf[0], buf[1], buf[2], buf[3]]);
-            if need.is_none() {
-                buf.clear();
+        let mut data: &[u8] = &report;
+        if cur.is_none() {
+            // first report of a frame: length prefix, then map the whole frame's buffer once
+            let Some(need) = wire::frame_len([report[0], report[1], report[2], report[3]]) else {
                 send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, b"bad length"));
                 continue;
+            };
+            let cap = (need.max(16 * 1024) + 4095) & !4095;
+            match xous::map_memory(None, None, cap, xous::MemoryFlags::R | xous::MemoryFlags::W) {
+                Ok(buf) => cur = Some(Incoming { buf, need, have: 0 }),
+                Err(e) => {
+                    log::warn!("no memory for a {need} B frame: {e:?}");
+                    send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, b"device out of memory for this frame"));
+                    continue; // the rest of this frame's reports will be rejected as bad lengths
+                }
             }
+            data = &report[4..];
         }
-        let n = need.unwrap();
-        if buf.len() < 4 + n {
+        let f = cur.as_mut().unwrap();
+        let take = data.len().min(f.need - f.have); // padding after the frame is discarded
+        unsafe { f.buf.as_slice_mut::<u8>()[f.have..f.have + take].copy_from_slice(&data[..take]) };
+        f.have += take;
+        if f.have < f.need {
             continue;
         }
-        // padding after the frame is discarded
-        let reply = handle(&buf[4..4 + n], verifier);
-        buf.clear();
-        need = None;
+        let f = cur.take().unwrap();
+        let reply = handle_mapped(f.buf, f.need, verifier);
         send_reports(&usb, &reply);
+    }
+}
+
+/// `handle` for a frame already in a lend buffer: `type` is its first byte, the message follows.
+/// Simulate/sign requests are lent to the verifier in place (shifted by one byte for `type`).
+#[cfg(target_os = "xous")]
+fn handle_mapped(mut buf: xous::MemoryRange, len: usize, verifier: &Verifier) -> Vec<u8> {
+    let ty = unsafe { buf.as_slice::<u8>()[0] };
+    let op = match ty {
+        wire::TYPE_SIMULATE => ipc::OP_SIMULATE,
+        wire::TYPE_SIGN => ipc::OP_SIGN,
+        _ => {
+            // small control messages: copy out and use the common path
+            let body = unsafe { buf.as_slice::<u8>()[..len].to_vec() };
+            xous::unmap_memory(buf).ok();
+            return handle(&body, verifier);
+        }
+    };
+    // drop the type byte so the verifier sees just the message
+    unsafe { buf.as_slice_mut::<u8>().copy_within(1..len, 0) };
+    match verifier.call_mapped(op, buf, len - 1) {
+        Ok(result) => wire::encode_frame(ty, &result),
+        Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
     }
 }
 

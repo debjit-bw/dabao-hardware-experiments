@@ -205,9 +205,31 @@ fn reply(mem: &mut xous::MemoryMessage, out: Vec<u8>, too_big: impl FnOnce(usize
     mem.valid = xous::MemorySize::new(out.len());
 }
 
+/// Xous caps each process's heap at 512 KiB by default (kernel `services.rs`, unless built with
+/// `big-heap`). Simulating a Uniswap swap needs ~0.7-0.9 MB, so the verifier raises its own cap
+/// (`AdjustProcessLimit` acts on the calling process; pddb does the same). Physical SRAM is
+/// 2 MiB shared by everything, so this is not unlimited.
+const HEAP_LIMIT: usize = 1536 * 1024;
+
+fn raise_heap_limit() {
+    use xous::{Limits, SysCall, rsyscall};
+    let cur = match rsyscall(SysCall::AdjustProcessLimit(Limits::HeapMaximum as usize, 0, HEAP_LIMIT)) {
+        Ok(xous::Result::Scalar2(1, cur)) => cur,
+        other => {
+            log::error!("can't read the heap limit: {other:?}");
+            return;
+        }
+    };
+    match rsyscall(SysCall::AdjustProcessLimit(Limits::HeapMaximum as usize, cur, HEAP_LIMIT)) {
+        Ok(xous::Result::Scalar2(1, new)) => log::info!("heap limit {} KiB -> {} KiB", cur / 1024, new / 1024),
+        other => log::error!("can't raise the heap limit: {other:?}"),
+    }
+}
+
 fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
+    raise_heap_limit();
     let xns = xous_names::XousNames::new().unwrap();
     let signer = start_signer_channel(&xns);
     let sid = xns.register_name(ipc::VERIFIER_SERVER_NAME, Some(1)).expect("can't register verifier");

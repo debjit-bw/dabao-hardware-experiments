@@ -66,6 +66,70 @@ pub struct SimResult {
     /// Verifier-side cost of this request.
     pub micros: u64,
     pub peak_heap: u64,
+    /// Normalised effects (see [`effect`]), computed on the device from `logs` and `changes`.
+    pub effects: Vec<Effect>,
+}
+
+/// One normalised effect of a simulated transaction. `kind` is one of the [`effect`]
+/// constants; the meaning of the other fields depends on it (documented there).
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct Effect {
+    pub kind: u8,
+    /// The contract the effect is about (token, collection, Permit2, proxy...); zero for ETH.
+    pub contract: Address,
+    pub from: Address,
+    pub to: Address,
+    pub amount: U256,
+    /// Kind-specific extra data (see [`effect`]).
+    pub extra: Bytes,
+}
+
+/// Effect kinds. Anything not recognised is reported as `UNEXPLAINED_STORAGE`, never dropped.
+pub mod effect {
+    /// ETH leaving `from` (net of gas), `amount` wei.
+    pub const NATIVE_OUT: u8 = 1;
+    /// ETH arriving at `to` (net of the block reward), `amount` wei.
+    pub const NATIVE_IN: u8 = 2;
+    /// Gas paid by `from`: `amount` = gas_used * gas_price wei.
+    pub const GAS_FEE: u8 = 3;
+    /// ERC-20 `Transfer` from `contract`: `from` -> `to`, `amount` units.
+    pub const ERC20_TRANSFER: u8 = 4;
+    /// ERC-20 `Approval` on `contract`: owner `from`, spender `to`, allowance `amount`.
+    pub const ERC20_APPROVAL: u8 = 5;
+    /// ERC-721 `Transfer` on `contract`: `from` -> `to`, token id `amount`.
+    pub const NFT_TRANSFER: u8 = 6;
+    /// ERC-721 `Approval` on `contract`: owner `from`, approved `to`, token id `amount`.
+    pub const NFT_APPROVAL: u8 = 7;
+    /// `ApprovalForAll` on `contract`: owner `from`, operator `to`, `amount` = 1 (granted) / 0.
+    pub const APPROVAL_FOR_ALL: u8 = 8;
+    /// ERC-1155 `TransferSingle` on `contract`: `from` -> `to`, `amount` units;
+    /// `extra` = token id (32 bytes BE).
+    pub const ERC1155_TRANSFER: u8 = 9;
+    /// Permit2 `Approval` or `Permit`: owner `from`, spender `to`, `amount`;
+    /// `extra` = token (20 bytes) || expiration (u48, 6 bytes BE). `contract` = Permit2.
+    pub const PERMIT2_APPROVAL: u8 = 10;
+    /// `OwnershipTransferred` on `contract`: previous owner `from` -> new owner `to`.
+    pub const OWNERSHIP_TRANSFER: u8 = 11;
+    /// EIP-1967 `Upgraded` on proxy `contract`: new implementation `to`.
+    pub const PROXY_UPGRADE: u8 = 12;
+    /// EIP-1967 `AdminChanged` on proxy `contract`: previous admin `from` -> new admin `to`.
+    pub const PROXY_ADMIN_CHANGE: u8 = 13;
+    /// `contract`'s storage changed but it emitted no recognised event: `amount` = number of
+    /// changed slots. Covers unknown events, silent balance moves, anything outside the subset.
+    pub const UNEXPLAINED_STORAGE: u8 = 14;
+    /// WETH-style `Deposit` on `contract`: `amount` ETH wrapped, credited to `to`.
+    pub const WRAP: u8 = 15;
+    /// WETH-style `Withdrawal` on `contract`: `amount` unwrapped, debited from `from`.
+    pub const UNWRAP: u8 = 16;
+    /// Uniswap V2 or V3 `Swap` on pool `contract`: initiator `from`, recipient `to`;
+    /// `extra` = the event data (V2: 4 words amount0In, amount1In, amount0Out, amount1Out;
+    /// V3: 5 words int256 amount0, int256 amount1, sqrtPriceX96, liquidity, tick).
+    pub const POOL_SWAP: u8 = 17;
+    /// Summary for the tx sender (`from`): net gain of asset `contract` (zero = ETH, gas
+    /// excluded), `amount` units, summed over the ETH moves and token transfer/wrap effects.
+    pub const NET_GAIN: u8 = 18;
+    /// Summary for the tx sender: net loss of asset `contract`, as `NET_GAIN`.
+    pub const NET_LOSS: u8 = 19;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
