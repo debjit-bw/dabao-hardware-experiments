@@ -1485,6 +1485,7 @@ dependencies = [
  "reth-evm-ethereum",
  "reth-primitives-traits",
  "stateless",
+ "stateless-validator-reth",
  "xous",
  "xous-api-log",
 ]
@@ -1514,6 +1515,11 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "ere-platform-core"
+version = "0.20.1"
+source = "git+https://github.com/eth-act/ere?tag=v0.20.1#312fe9b3c22c39d62314359ee9437a4e46f86de7"
 
 [[package]]
 name = "fastrand"
@@ -2167,6 +2173,47 @@ name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
+name = "libssz"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4bdd6d63ed811ae164966de20810be780e07de784a4834ccfe6be90480c369e"
+dependencies = [
+ "smallvec",
+]
+
+[[package]]
+name = "libssz-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeee1b9ac9200429f7e9830492765445989ea61c3fb9028ad5a96e1dd5f5e913"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "libssz-merkle"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "863eca32d1a43e5ec41106a515552efa8307768d37c68d26b7f21ff13cfee1a7"
+dependencies = [
+ "libssz",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "libssz-types"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4231ac301726840a3fe111f11bd4619d3c97ed155cb94c88dbf92b70e04e017"
+dependencies = [
+ "libssz",
+ "libssz-merkle",
+ "smallvec",
+]
 
 [[package]]
 name = "litemap"
@@ -3076,6 +3123,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "reth-payload-validator"
+version = "2.5.2"
+source = "git+https://github.com/paradigmxyz/reth?rev=db702b511a9dfe5a80ef76685dd93652ffe37cc5#db702b511a9dfe5a80ef76685dd93652ffe37cc5"
+dependencies = [
+ "alloy-consensus",
+ "alloy-rpc-types-engine",
+ "reth-primitives-traits",
+]
+
+[[package]]
 name = "reth-primitives-traits"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3888,6 +3945,41 @@ dependencies = [
  "revm-state",
  "serde",
  "serde_with",
+ "thiserror",
+ "tries",
+]
+
+[[package]]
+name = "stateless-validator-common"
+version = "0.1.0"
+source = "git+https://github.com/paradigmxyz/stateless?tag=reth-guest-v0.1.0-rc.9#b7c14668085547113a2715979fc20300d26cdb3f"
+dependencies = [
+ "libssz",
+ "libssz-derive",
+ "libssz-merkle",
+ "libssz-types",
+ "paste",
+ "thiserror",
+]
+
+[[package]]
+name = "stateless-validator-reth"
+version = "0.1.0"
+source = "git+https://github.com/paradigmxyz/stateless?tag=reth-guest-v0.1.0-rc.9#b7c14668085547113a2715979fc20300d26cdb3f"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-genesis",
+ "alloy-primitives",
+ "alloy-rpc-types-engine",
+ "ere-platform-core",
+ "reth-chainspec",
+ "reth-ethereum-primitives",
+ "reth-evm-ethereum",
+ "reth-payload-validator",
+ "reth-primitives-traits",
+ "stateless",
+ "stateless-validator-common",
  "thiserror",
  "tries",
 ]

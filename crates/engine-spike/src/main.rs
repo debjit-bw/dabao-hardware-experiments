@@ -1,32 +1,66 @@
-//! Engine spike: link `stateless::stateless_validation` (reth stateless block
-//! validation: witness verification + revm execution) into a Xous app and time it.
+//! Engine spike: run reth stateless block validation (witness verification +
+//! revm execution) inside a Xous process and measure it.
 //!
-//! Stage 1 (this file): empty input, which is expected to fail validation; the
-//! point is that the whole engine is linked, so we can measure binary size.
-//! Stage 2: a real block + `ExecutionWitness` containing an ERC-20 transfer.
+//! Stage 2: the upstream guest program (`stateless_validator_reth::run_stateless_guest`,
+//! SSZ in / SSZ out) on the release smoke fixture from paradigmxyz/stateless,
+//! compared byte-for-byte against the expected output. Reports wall time and
+//! peak heap.
 
+#[allow(dead_code)] // mainnet spec for the later simulate-a-tx path; unused by the guest path
 mod chainspec;
 
-use std::time::Instant;
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    sync::atomic::{AtomicUsize, Ordering::Relaxed},
+    time::Instant,
+};
 
-use reth_evm_ethereum::EthEvmConfig;
-use stateless::StatelessInput;
+/// Counts live and peak heap bytes. Xous has no allocator statistics, and peak
+/// heap is what decides whether a block fits in 2 MiB of SRAM.
+struct Counting;
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc(l) };
+        if !p.is_null() {
+            PEAK.fetch_max(LIVE.fetch_add(l.size(), Relaxed) + l.size(), Relaxed);
+        }
+        p
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        unsafe { System.dealloc(p, l) };
+        LIVE.fetch_sub(l.size(), Relaxed);
+    }
+}
+
+#[global_allocator]
+static GLOBAL: Counting = Counting;
+
+const SMOKE_IN: &[u8] = include_bytes!("../fixtures/guest-smoke.in.ssz");
+const SMOKE_OUT: &[u8] = include_bytes!("../fixtures/guest-smoke.out.ssz");
 
 fn main() {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     log::info!("engine-spike, PID {}", xous::process::id());
 
-    let input = StatelessInput::default();
-    let spec = chainspec::mainnet_no_alloc();
-    let evm_config = EthEvmConfig::new(spec.clone());
-
+    let base = LIVE.load(Relaxed);
+    PEAK.store(base, Relaxed);
     let start = Instant::now();
-    let result = stateless::stateless_validation(input.block, input.witness, spec, evm_config);
+    let out = stateless_validator_reth::guest::run_stateless_guest(SMOKE_IN);
     let elapsed = start.elapsed();
+    let peak = PEAK.load(Relaxed) - base;
 
-    match result {
-        Ok(out) => log::info!("validation OK in {elapsed:?}: {out:?}"),
-        Err(e) => log::info!("validation error in {elapsed:?} (expected for empty input): {e}"),
+    // StatelessValidationResult SSZ: new_payload_request_root (32) | successful_validation (1) | ...
+    let valid = out.get(32) == Some(&1);
+    let matches = out == SMOKE_OUT;
+    log::info!(
+        "smoke: successful_validation={valid} output_matches_expected={matches} time={elapsed:?} peak_heap={peak} B (input {} B)",
+        SMOKE_IN.len()
+    );
+    if !matches {
+        log::error!("output {out:02x?}\nexpected {SMOKE_OUT:02x?}");
     }
 }
