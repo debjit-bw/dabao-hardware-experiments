@@ -1,0 +1,31 @@
+[package]
+name = "keystore-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "TEST ONLY: plays a compromised process and tries to reach the signer's keystore app slots"
+publish = false
+
+[[bin]]
+name = "keystore-probe"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4.14"
+xous = "0.9.71"
+xous-names = { package = "xous-api-names", version = "0.9.72" }
+sim-types = { path = "../sim-types" }
+log-server = { package = "xous-api-log", version = "0.1.70" }
+# only to switch the USB log mirror on (as dabao-console does), so results show on the console
+usb-bao1x = { path = "../../../dabao-workshop/xous-core/services/usb-bao1x", optional = true }
+bao1x-api = { path = "../../../dabao-workshop/xous-core/libs/bao1x-api", optional = true, features = ["std"] }
+keystore-api = { path = "../../../dabao-workshop/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
+xous-ipc = { version = "0.10.11", optional = true }
+utralib = { version = "0.1.27", optional = true, default-features = false }
+
+[features]
+board-dabao = ["keystore-api", "xous-ipc", "usb-bao1x", "bao1x-api"]
+bao1x = ["utralib/bao1x"]
+# claim the signer's slots immediately at boot, racing the signer (tests that the signer
+# then refuses to start)
+steal = []

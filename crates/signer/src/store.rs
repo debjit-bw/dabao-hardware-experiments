@@ -3,8 +3,12 @@
 //! * slot 1: `MAGIC` and the first 24 bytes of SHA-256(key), written last, so a key is only
 //!   used once it is completely stored.
 //!
-//! Caveat (dabao): the keystore registers with unlimited connections and doesn't check the
-//! caller, so any process can read app slots. See PROGRESS.md / the keystore-claim plan.
+//! Isolation (device): stock dabao keystore lets any process read any app slot. Our keystore
+//! patch (patches/xous-core-keystore-app-slot-claims.patch, docs/keystore-slot-claims.md) adds
+//! `AppKey::Claim`: the first process to claim a slot range owns it until reboot. The signer
+//! claims its two slots before touching them and refuses to run if the claim fails. The
+//! transport reads no host input until the signer is attached, so the claim always comes
+//! before any untrusted input is processed.
 
 use k256::ecdsa::SigningKey;
 use sha2::{Digest, Sha256};
@@ -25,10 +29,19 @@ struct Keystore(xous::CID);
 #[cfg(target_os = "xous")]
 impl Keystore {
     const BASE: usize = 160;
+    const LEN: usize = 2;
 
+    /// Connect and claim our slots. Panics if the claim is refused: then another process
+    /// owns (and may have read or replaced) them, and the key must not be used.
     fn open() -> Self {
+        use keystore_api::{APPKEY_GUARD, AppKey};
         let xns = xous_names::XousNames::new().unwrap();
-        Keystore(xns.request_connection_blocking(keystore_api::SERVER_NAME_KEYS).expect("keystore"))
+        let ks = Keystore(xns.request_connection_blocking(keystore_api::SERVER_NAME_KEYS).expect("keystore"));
+        match ks.call(AppKey::Claim { guard: APPKEY_GUARD, start: Self::BASE, len: Self::LEN }) {
+            AppKey::Success => log::info!("claimed keystore app slots {}..{}", Self::BASE, Self::BASE + Self::LEN),
+            e => panic!("can't claim keystore app slots {}..{}: {e:?}", Self::BASE, Self::BASE + Self::LEN),
+        }
+        ks
     }
 
     fn call(&self, op: keystore_api::AppKey) -> keystore_api::AppKey {

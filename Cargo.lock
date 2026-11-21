@@ -2999,6 +2999,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "keystore-probe"
+version = "0.1.0"
+dependencies = [
+ "bao1x-api",
+ "keystore-api",
+ "log",
+ "sim-types",
+ "usb-bao1x",
+ "utralib",
+ "xous",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-ipc",
+]
+
+[[package]]
 name = "konst"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
