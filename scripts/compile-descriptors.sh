@@ -4,4 +4,5 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$here"
 cargo run -q --release -p dabao-host -- compile-descriptors crates/clear-sign/descriptors.bin \
-    descriptors/registry/calldata-UniswapV3Router02.json descriptors/weth.json
+    descriptors/registry/calldata-UniswapV3Router02.json \
+    descriptors/sepolia/calldata-UniswapV3Router02.sepolia.json descriptors/weth.json
