@@ -142,3 +142,17 @@ fn revert_is_refused() {
     let c = clear_sign::check(&clear_sign::builtin(), 1, &t, false, &[]);
     assert!(show(&c).contains("reverts"), "{}", show(&c));
 }
+
+#[test]
+fn sepolia_transactions_pass() {
+    // the three txs the Dabao signed on Sepolia (Amsterdam, EIP-7708 ETH logs)
+    for (name, f) in [
+        ("eth send", &include_bytes!("../../xous-evm/fixtures/sepolia-eth-send.rlp")[..]),
+        ("weth deposit", &include_bytes!("../../xous-evm/fixtures/sepolia-weth-deposit.rlp")[..]),
+        ("weth transfer", &include_bytes!("../../xous-evm/fixtures/sepolia-weth-transfer.rlp")[..]),
+    ] {
+        let (_, c) = run(f);
+        eprintln!("{name}: {}", show(&c));
+        assert!(!c.descriptor.is_empty() && c.violations.is_empty(), "{name}: {}", show(&c));
+    }
+}

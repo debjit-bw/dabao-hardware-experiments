@@ -187,7 +187,7 @@ async fn replay_on_parent(
         .with_gas_price(gas_price);
     let (state, codes, keys, n_acc, n_slots) = witness(p, at, &req, &[from, to, bh.beneficiary]).await?;
     let input = SimInput {
-        chain_id: 1,
+        chain_id: p.get_chain_id().await?,
         parent_header: alloy_rlp::encode(&ph).into(),
         block: SimBlock {
             number,
@@ -292,7 +292,7 @@ async fn build_at_latest(
     }
 
     let input = SimInput {
-        chain_id: 1,
+        chain_id: p.get_chain_id().await?,
         parent_header: alloy_rlp::encode(&ph).into(),
         block: SimBlock {
             number: n + 1,

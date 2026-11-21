@@ -14,6 +14,10 @@ use k256::ecdsa::SigningKey;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+// DO NOT CHANGE the slot layout (BASE, LEN, MAGIC, header format): the key stored here is the
+// project's persistent, funded testnet account (board address
+// 0x7813e1C142086D37060Be2335ff9Dd4EA4a2F986). Changing it makes the signer look in the wrong
+// place and create a new key; the old one would still be in RRAM but unused.
 const MAGIC: &[u8; 8] = b"DABAOSG1";
 type Slot = [u8; 32];
 
@@ -112,16 +116,27 @@ fn header(key: &Slot) -> Slot {
     h
 }
 
-fn load(slots: &mut impl Slots) -> Option<SigningKey> {
-    let h = slots.read(1)?;
+/// What the slots hold.
+enum Stored {
+    /// No header: a fresh device, or a first-boot write cut before the header (that key was
+    /// never used). Safe to create a key.
+    Empty,
+    Key(SigningKey),
+}
+
+/// Never returns `Empty` for an existing key: a read error, a header that doesn't match the
+/// key, or an invalid key is an error, so a transient fault can't make the signer overwrite
+/// (and lose) the stored key.
+fn load(slots: &mut impl Slots) -> Result<Stored, &'static str> {
+    let h = slots.read(1).ok_or("can't read the key header slot")?;
     if &h[..8] != MAGIC {
-        return None;
+        return Ok(Stored::Empty);
     }
-    let k = Zeroizing::new(slots.read(0)?);
+    let k = Zeroizing::new(slots.read(0).ok_or("can't read the key slot")?);
     if header(&k) != h {
-        return None;
+        return Err("key slot doesn't match its header (corrupted?)");
     }
-    SigningKey::from_slice(&k[..]).ok()
+    SigningKey::from_slice(&k[..]).map(Stored::Key).map_err(|_| "stored key is not a valid secp256k1 scalar")
 }
 
 /// 32 bytes from the TRNG (`getrandom`) and the kernel's entropy pool, mixed with SHA-256.
@@ -150,16 +165,24 @@ pub fn load_or_create_key() -> SigningKey {
     let mut slots = Keystore::open();
     #[cfg(not(target_os = "xous"))]
     let mut slots = HostFile::open();
-    if let Some(k) = load(&mut slots) {
-        log::info!("signing key loaded");
-        return k;
+    match load(&mut slots) {
+        Ok(Stored::Key(k)) => {
+            log::info!("signing key loaded");
+            return k;
+        }
+        Ok(Stored::Empty) => {}
+        // refuse to run rather than replace a key we failed to read
+        Err(e) => panic!("signing key present but unusable: {e}; refusing to create a new one"),
     }
     let k = fresh_key();
-    // key first, header last: a power cut in between leaves no key
+    // key first, header last: a power cut in between leaves no header (-> Empty next boot)
     if !(slots.write(0, &k) && slots.write(1, &header(&k))) {
         panic!("can't store the signing key");
     }
-    let loaded = load(&mut slots).expect("the signing key doesn't read back");
+    let loaded = match load(&mut slots) {
+        Ok(Stored::Key(k)) => k,
+        _ => panic!("the signing key doesn't read back"),
+    };
     log::info!("new signing key created and stored");
     loaded
 }

@@ -40,8 +40,16 @@ fn fx(kind: u8, contract: Address, from: Address, to: Address, amount: U256, ext
     Effect { kind, contract, from, to, amount, extra }
 }
 
+/// EIP-7708 (Amsterdam): every ETH movement also emits `Transfer(from, to, amount)` from this
+/// system address. ETH moves are already derived from balance deltas, so these logs are
+/// bookkeeping, never an ERC-20 transfer of a "token" at this address.
+const ETH_TRANSFER_LOG_ADDRESS: Address = alloy_primitives::address!("0xfffffffffffffffffffffffffffffffffffffffe");
+
 /// One log -> an effect, if it is one of the recognised, well-formed events.
 fn from_log(l: &SimLog) -> Option<Effect> {
+    if l.address == ETH_TRANSFER_LOG_ADDRESS {
+        return None;
+    }
     let t = &l.topics;
     let d = &l.data[..];
     let c = l.address;
@@ -349,6 +357,19 @@ mod tests {
         assert!(k.contains(&effect::WRAP) && k.contains(&effect::POOL_SWAP));
         let net: Vec<_> = e.iter().filter(|e| matches!(e.kind, effect::NET_GAIN | effect::NET_LOSS)).map(|e| (e.kind, e.contract, e.amount)).collect();
         assert_eq!(net, vec![(effect::NET_LOSS, Address::ZERO, U256::from(100)), (effect::NET_GAIN, T, U256::from(250))]);
+    }
+
+    #[test]
+    fn eip7708_eth_transfer_logs_are_not_tokens() {
+        // Amsterdam: a plain ETH transfer of 1000 also logs Transfer(A, B, 1000) from 0xff..fe
+        let sys = address!("0xfffffffffffffffffffffffffffffffffffffffe");
+        let r = result(21_000, vec![log(sys, vec![sig("Transfer(address,address,uint256)"), t(A), t(B)], w(1000))], vec![
+            change(A, 1_000_000, 1_000_000 - 1000 - 21_000 * 12, 0),
+            change(B, 0, 1000, 0),
+        ]);
+        let e = effects(&tx(1000), &block(), &r);
+        assert_eq!(kinds(&e), vec![effect::GAS_FEE, effect::NATIVE_OUT, effect::NATIVE_IN, effect::NET_LOSS]);
+        assert_eq!(e[3].contract, Address::ZERO); // an ETH loss, not a token at 0xff..fe
     }
 
     #[test]
