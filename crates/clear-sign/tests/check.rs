@@ -156,3 +156,18 @@ fn sepolia_transactions_pass() {
         assert!(!c.descriptor.is_empty() && c.violations.is_empty(), "{name}: {}", show(&c));
     }
 }
+
+#[test]
+fn sepolia_swaps_signed_by_the_board_pass() {
+    // two Uniswap swaps (1e10 wei ETH -> USDC) the Dabao signed on Sepolia, replayed on their
+    // parent state; the second is wrapped in multicall(deadline, [exactInputSingle])
+    for (name, f, intent) in [
+        ("exactInputSingle", &include_bytes!("../../xous-evm/fixtures/sepolia-swap.rlp")[..], "swap"),
+        ("multicall", &include_bytes!("../../xous-evm/fixtures/sepolia-swap-multicall.rlp")[..], "multicall: swap"),
+    ] {
+        let (_, c) = run(f);
+        assert!(c.violations.is_empty(), "{name}: {}", show(&c));
+        assert_eq!(String::from_utf8_lossy(&c.intent), intent, "{name}");
+        assert!(show(&c).contains("Minimum to Receive=252"), "{name}: {}", show(&c));
+    }
+}

@@ -64,6 +64,11 @@ mined swap). Crafted effects are refused: losing more than shown, a different to
 an ownership change; unexplained storage; unknown contract, unknown function, unknown call inside
 a multicall; a revert.
 
+On chain (Sepolia, signed by the Dabao, receipts identical to the device's prediction): plain ETH
+transfers, WETH wrap and transfer (our WETH descriptor), and two Uniswap swaps through
+SwapRouter02 — `exactInputSingle` and `multicall(deadline, [exactInputSingle])` — clear-signed
+with the registry's formats (Sepolia `context`). See PROGRESS.md for the transaction links.
+
 ## Limits / next
 
 - Amounts are checked numerically; displays don't yet use token decimals or tickers (the device

@@ -38,3 +38,19 @@ fn weth_transfer_matches_chain() {
     assert_eq!(r.logs.len(), 1);
     assert_eq!(kinds(&r), vec![effect::GAS_FEE, effect::ERC20_TRANSFER, effect::NET_LOSS]);
 }
+
+#[test]
+fn swaps_match_chain() {
+    // gas from the receipts; the first swap creates the sender's USDC balance (EIP-8037 state gas)
+    for (f, gas) in [
+        (&include_bytes!("../fixtures/sepolia-swap.rlp")[..], 252_708u64),
+        (&include_bytes!("../fixtures/sepolia-swap-multicall.rlp")[..], 157_878),
+    ] {
+        let r = simulate(f).unwrap();
+        assert!(r.success);
+        assert_eq!(r.gas_used, gas);
+        assert_eq!(r.logs.len(), 6);
+        assert!(!kinds(&r).contains(&effect::UNEXPLAINED_STORAGE));
+        assert!(kinds(&r).contains(&effect::POOL_SWAP));
+    }
+}
