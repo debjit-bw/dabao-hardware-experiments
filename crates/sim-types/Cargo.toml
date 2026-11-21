@@ -1,0 +1,10 @@
+[package]
+name = "sim-types"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Wire format between the host witness generator and the on-device simulator"
+
+[dependencies]
+alloy-primitives = { version = "1.6.1", default-features = false }
+alloy-rlp = { version = "0.3.16", default-features = false, features = ["derive"] }

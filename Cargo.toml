@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine-spike"]
+members = ["crates/engine-spike", "crates/sim-types", "host/witness-gen"]
 
 # Patches and profiles only take effect at the workspace root.
 [patch.crates-io]

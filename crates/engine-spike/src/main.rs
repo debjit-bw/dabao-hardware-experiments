@@ -6,8 +6,8 @@
 //! compared byte-for-byte against the expected output. Reports wall time and
 //! peak heap.
 
-#[allow(dead_code)] // mainnet spec for the later simulate-a-tx path; unused by the guest path
 mod chainspec;
+mod sim;
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -40,6 +40,17 @@ static GLOBAL: Counting = Counting;
 
 const SMOKE_IN: &[u8] = include_bytes!("../fixtures/guest-smoke.in.ssz");
 const SMOKE_OUT: &[u8] = include_bytes!("../fixtures/guest-smoke.out.ssz");
+/// Stage 3: WETH transfer(0x..dEaD, 1) on mainnet state; see host/witness-gen.
+const WETH_TRANSFER: &[u8] = include_bytes!("../fixtures/weth-transfer.rlp");
+
+/// Runs `f`, returning its result, wall time and peak heap above the starting level.
+fn measure<T>(f: impl FnOnce() -> T) -> (T, std::time::Duration, usize) {
+    let base = LIVE.load(Relaxed);
+    PEAK.store(base, Relaxed);
+    let start = Instant::now();
+    let r = f();
+    (r, start.elapsed(), PEAK.load(Relaxed) - base)
+}
 
 fn main() {
     log_server::init_wait().unwrap();
@@ -49,12 +60,25 @@ fn main() {
     // mirrored to USB before a listener exists are dropped.
     std::thread::sleep(std::time::Duration::from_secs(10));
 
-    let base = LIVE.load(Relaxed);
-    PEAK.store(base, Relaxed);
-    let start = Instant::now();
-    let out = stateless_validator_reth::guest::run_stateless_guest(SMOKE_IN);
-    let elapsed = start.elapsed();
-    let peak = PEAK.load(Relaxed) - base;
+    let (out, elapsed, peak) = measure(|| stateless_validator_reth::guest::run_stateless_guest(SMOKE_IN));
+
+    // Stage 3: simulate the WETH transfer; then the same input with one trie node removed,
+    // which must fail (a missing proof must never read as an empty account or zero slot).
+    let (sim, sim_t, sim_peak) = measure(|| sim::simulate(WETH_TRANSFER));
+    let sim_line = match &sim {
+        Ok(r) => format!(
+            "success={} gas_used={} output={} logs={} changes={:?}",
+            r.success, r.gas_used, r.output, r.logs, r.changes
+        ),
+        Err(e) => format!("ERROR {e}"),
+    };
+    let missing = sim::simulate_with(WETH_TRANSFER, |i| {
+        i.state.pop();
+    });
+    let missing_line = match &missing {
+        Ok(r) => format!("UNEXPECTED SUCCESS (fail-open!) success={} gas={}", r.success, r.gas_used),
+        Err(e) => format!("rejected as expected: {e}"),
+    };
 
     // StatelessValidationResult SSZ: new_payload_request_root (32) | successful_validation (1) | ...
     let valid = out.get(32) == Some(&1);
@@ -68,6 +92,8 @@ fn main() {
         if !matches {
             log::error!("output {out:02x?}\nexpected {SMOKE_OUT:02x?}");
         }
+        log::info!("weth-transfer: {sim_line} time={sim_t:?} peak_heap={sim_peak} B (input {} B)", WETH_TRANSFER.len());
+        log::info!("weth-transfer minus one witness node: {missing_line}");
         std::thread::sleep(std::time::Duration::from_secs(5));
     }
 }
