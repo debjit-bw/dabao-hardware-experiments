@@ -9,7 +9,7 @@ description = "Witness-verified single-transaction EVM simulation (paradigmxyz/s
 sim-types = { path = "../sim-types" }
 stateless = { git = "https://github.com/paradigmxyz/stateless", tag = "reth-guest-v0.1.0-rc.9" }
 tries = { git = "https://github.com/paradigmxyz/stateless", tag = "reth-guest-v0.1.0-rc.9", default-features = false }
-revm = { version = "43.0.1", default-features = false, features = ["std"] }
+revm = { version = "43.0.1", default-features = false, features = ["std", "optional_eip3607", "optional_no_base_fee"] }
 alloy-evm = { version = "0.39.0", default-features = false }
 alloy-rlp = { version = "0.3.16", default-features = false }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "db702b511a9dfe5a80ef76685dd93652ffe37cc5", default-features = false }

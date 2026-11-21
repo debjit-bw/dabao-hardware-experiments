@@ -12,7 +12,7 @@ xous-evm = { path = "../../crates/xous-evm" }
 clear-sign = { path = "../../crates/clear-sign" }
 policy = { path = "../../crates/policy" }
 serde_json = "1"
-alloy = { version = "2.4.2", default-features = false, features = ["providers", "provider-http", "rpc-types", "consensus", "k256", "json-abi", "reqwest-rustls-tls"] }
+alloy = { version = "2.4.2", default-features = false, features = ["providers", "provider-http", "rpc-types", "consensus", "k256", "json-abi", "reqwest-rustls-tls", "network", "signers", "signer-local", "sol-types", "rand"] }
 alloy-primitives = { version = "1.6.1" }
 alloy-rlp = { version = "0.3.16" }
 alloy-trie = { version = "0.9.5" }

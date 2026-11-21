@@ -66,6 +66,23 @@ pub fn simulate(raw: &[u8]) -> Result<SimResult, String> {
 
 /// Like `simulate`, but lets a test tamper with the decoded input first.
 pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<SimResult, String> {
+    simulate_opts(raw, tamper, &Options::default()).map(|(r, _)| r)
+}
+
+/// How to run the transaction.
+#[derive(Default)]
+pub struct Options {
+    /// Run `tx` as a call *made by a contract* (a Safe executing its inner call): no EIP-3607
+    /// sender-has-code rejection, no nonce check, no base fee (gas price 0: the Safe's executor
+    /// pays the gas, not the Safe). Value and storage effects are exactly those of the call.
+    pub as_contract: bool,
+    /// Storage slots to read from the verified pre-state, returned in order (e.g. a Safe's
+    /// owners and nonce). A slot the witness doesn't cover rejects the input (fail closed).
+    pub reads: Vec<(Address, U256)>,
+}
+
+/// `simulate` with [`Options`]; returns the result and the pre-state `reads`.
+pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Options) -> Result<(SimResult, Vec<U256>), String> {
     let mut input = SimInput::decode(&mut &raw[..]).map_err(|e| format!("decode SimInput: {e}"))?;
     tamper(&mut input);
     let parent = Header::decode(&mut &input.parent_header[..]).map_err(|e| format!("decode header: {e}"))?;
@@ -78,6 +95,15 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
     };
     let (trie, bytecode) =
         SparseState::new(witness, parent.state_root).map_err(|e| format!("witness vs state root: {e}"))?;
+    let reads = opts
+        .reads
+        .iter()
+        .map(|(a, slot)| trie.storage(*a, *slot).map_err(|e| format!("witness lacks {a} slot {slot:#x}: {e}")))
+        .collect::<Result<Vec<U256>, String>>()?;
+    if opts.as_contract {
+        input.tx.gas_price = 0;
+        input.tx.max_priority_fee_per_gas = None;
+    }
     let db = WitnessDb {
         trie: &trie,
         bytecode,
@@ -117,6 +143,11 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         .modify_cfg_chained(|cfg| {
             cfg.chain_id = input.chain_id;
             cfg.set_spec_and_mainnet_gas_params(spec_id);
+            if opts.as_contract {
+                cfg.disable_eip3607 = true;
+                cfg.disable_nonce_check = true;
+                cfg.disable_base_fee = true;
+            }
         })
         .build_mainnet();
     let out = evm.transact(tx).map_err(|e| format!("execution: {e:?}"))?;
@@ -164,5 +195,5 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         policy: Default::default(),
     };
     r.effects = crate::effects::effects(&input.tx, &input.block, &r);
-    Ok(r)
+    Ok((r, reads))
 }

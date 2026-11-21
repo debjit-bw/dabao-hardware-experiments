@@ -156,6 +156,27 @@ pub fn sign_checked(input: &[u8], tcp: Option<&str>) -> Result<(SimResult, Optio
     Ok((r.sim, Some(r.signed_tx.to_vec())))
 }
 
+/// Ask the device to co-sign a Safe transaction (`input.tx.from` = the Safe); prints the
+/// simulation. The caller checks the signature against the SafeTx hash it computes itself.
+pub fn safe_sign(input: &[u8], tcp: Option<&str>) -> Result<SignResult> {
+    let req: SimInput = alloy_rlp::Decodable::decode(&mut &input[..]).context("decode SimInput")?;
+    precheck(input, tcp)?;
+    let (msg, rtt) = exchange(wire::TYPE_SAFE_SIGN, input, wire::TYPE_SAFE_SIGN, tcp)?;
+    let r: SignResult = alloy_rlp::Decodable::decode(&mut &msg[..]).context("decode SignResult")?;
+    println!(
+        "Safe co-sign request {} B, round trip {rtt:?} (verifier: {} us, peak heap {} B); device {}",
+        input.len(),
+        r.sim.micros,
+        r.sim.peak_heap,
+        r.signer
+    );
+    print_sim(&r.sim, req.chain_id);
+    if !r.refused.is_empty() {
+        println!("NOT CO-SIGNED: {}", String::from_utf8_lossy(&r.refused));
+    }
+    Ok(r)
+}
+
 /// One line per effect, e.g. "ERC20 transfer  0.5 USDC: 0x08a1… -> 0x8fb0…" (amounts with the
 /// firmware's token list, the same the device uses for its shown fields).
 fn describe(e: &sim_types::Effect, chain_id: u64) -> String {

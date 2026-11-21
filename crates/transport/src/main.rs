@@ -104,6 +104,10 @@ fn handle(body: &[u8], verifier: &Verifier) -> Vec<u8> {
             Ok(result) => wire::encode_frame(wire::TYPE_SIGN, &result),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
         },
+        wire::TYPE_SAFE_SIGN => match verifier.call(ipc::OP_SAFE_SIGN, message) {
+            Ok(result) => wire::encode_frame(wire::TYPE_SAFE_SIGN, &result),
+            Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
+        },
         wire::TYPE_STATUS => match verifier.call(ipc::OP_STATUS, &[]) {
             Ok(st) => wire::encode_frame(wire::TYPE_STATUS, &st),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
@@ -258,6 +262,7 @@ fn handle_mapped(mut buf: xous::MemoryRange, len: usize, verifier: &Verifier) ->
     let op = match ty {
         wire::TYPE_SIMULATE => ipc::OP_SIMULATE,
         wire::TYPE_SIGN => ipc::OP_SIGN,
+        wire::TYPE_SAFE_SIGN => ipc::OP_SAFE_SIGN,
         _ => {
             // small control messages: copy out and use the common path
             let body = unsafe { buf.as_slice::<u8>()[..len].to_vec() };

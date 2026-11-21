@@ -17,6 +17,7 @@
 //!   dabao-host compile-descriptors <out.bin> <descriptor.json>...   ERC-7730 -> device blob
 //!   dabao-host compile-policy <out.bin> <policy.json>              signing policy -> device blob
 //!   dabao-host policy                                              the device's policy and counters
+//!   dabao-host safe keys|create|info|fund|send ...                 2-of-3 Safe co-signed by the device (safe.rs)
 //!   dabao-host build-synthetic <from> <out.rlp> [--data 0x.. | --eip1559]   SYNTHETIC state where <from> holds 1 ETH
 //!                                           (tests the sign path; not mainnet state)
 //!
@@ -64,6 +65,7 @@ fn balance_of_calldata(who: Address) -> Bytes {
 mod descriptors;
 mod policy;
 mod replay;
+mod safe;
 mod send;
 mod synthetic;
 mod tx;
@@ -93,6 +95,33 @@ async fn main() -> Result<()> {
             // safety: single-threaded at this point (before any RPC client exists)
             unsafe { std::env::set_var("RPC_URL", url) };
         }
+    }
+    if args.first().map(String::as_str) == Some("safe") {
+        let sub = args.get(1).map(String::as_str).unwrap_or("");
+        let mut a = safe::Args { to: Address::ZERO, value: U256::ZERO, data: Bytes::new(), broadcast: false, agent_only: false };
+        let mut have_to = false;
+        let mut it = args.iter().skip(2);
+        while let Some(k) = it.next() {
+            match k.as_str() {
+                "--to" => {
+                    a.to = it.next().context("--to ADDR")?.parse()?;
+                    have_to = true;
+                }
+                "--value" => a.value = it.next().context("--value WEI")?.parse()?,
+                "--data" => a.data = it.next().context("--data 0x..")?.parse()?,
+                "--broadcast" => a.broadcast = true,
+                "--agent-only" => a.agent_only = true,
+                other => bail!("safe {sub}: unknown option {other}"),
+            }
+        }
+        return match sub {
+            "keys" => safe::keys().await,
+            "create" => safe::create(&provider()?, tcp).await,
+            "info" => safe::info(&provider()?).await,
+            "fund" => safe::fund(&provider()?, a.value).await,
+            "send" if have_to => safe::send(&provider()?, a, tcp).await,
+            _ => bail!("usage: dabao-host safe keys | create | info | fund --value WEI | send --to ADDR [--value WEI] [--data 0x..] [--broadcast | --agent-only]  [--chain sepolia] [--tcp ADDR]"),
+        };
     }
     if args.first().map(String::as_str) == Some("send-tx") {
         let mut a = tx::Args { to: Address::ZERO, value: U256::ZERO, data: Bytes::new(), broadcast: false, legacy: false };

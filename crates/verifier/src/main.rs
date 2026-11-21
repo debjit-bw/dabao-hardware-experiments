@@ -55,6 +55,13 @@ fn error_result(e: impl Into<String>) -> SimResult {
 /// Inputs whose estimated peak memory doesn't fit are rejected up front: running out of memory
 /// aborts the verifier, which would leave the device stuck until RESET.
 fn run(input: &[u8], counters: &Counters) -> (SimResult, Vec<(usize, policy::Counter)>) {
+    let (r, u, _) = run_as(input, counters, None);
+    (r, u)
+}
+
+/// `run`; with `safe_owner = Some(device)`, `tx.from` is a Safe: the call is simulated as made
+/// by the Safe, and its configuration is read from the verified pre-state.
+fn run_as(input: &[u8], counters: &Counters, safe_owner: Option<Address>) -> (SimResult, Vec<(usize, policy::Counter)>, Option<sim_types::safe::State>) {
     let max = MAX_INPUT;
     if input.len() > max {
         let e = error_result(format!(
@@ -62,12 +69,24 @@ fn run(input: &[u8], counters: &Counters) -> (SimResult, Vec<(usize, policy::Cou
             input.len(),
             estimated_peak(input.len()) / 1024
         ));
-        return (e, vec![]);
+        return (e, vec![], None);
     }
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
     let start = Instant::now();
-    let mut r = xous_evm::sim::simulate(input).unwrap_or_else(error_result);
+    let mut opts = xous_evm::sim::Options::default();
+    if let Some(device) = safe_owner {
+        let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) else {
+            return (error_result("decode SimInput"), vec![], None);
+        };
+        opts.as_contract = true;
+        opts.reads = sim_types::safe::slots(device).iter().map(|s| (inp.tx.from, *s)).collect();
+    }
+    let (mut r, reads) = match xous_evm::sim::simulate_opts(input, |_| {}, &opts) {
+        Ok(x) => x,
+        Err(e) => (error_result(e), vec![]),
+    };
+    let safe = (safe_owner.is_some() && reads.len() == 6).then(|| sim_types::safe::State::from_slots(&reads.try_into().unwrap()));
     let mut updates = Vec::new();
     if r.error.is_empty() {
         if let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
@@ -84,7 +103,7 @@ fn run(input: &[u8], counters: &Counters) -> (SimResult, Vec<(usize, policy::Cou
     }
     r.micros = start.elapsed().as_micros() as u64;
     r.peak_heap = (PEAK.load(Relaxed) - base) as u64;
-    (r, updates)
+    (r, updates, safe)
 }
 
 /// The signing policy compiled into the firmware (crates/policy/policy.bin).
@@ -96,7 +115,7 @@ static DESCRIPTORS: std::sync::LazyLock<clear_sign::model::DescriptorSet> = std:
 /// Sign only if the simulation succeeded, the ERC-7730 check matched a descriptor and found
 /// every effect explained by what the user is shown, the policy passed, and the tx is sent
 /// from this device's address on a chain the simulator has a spec for (mainnet, Sepolia).
-fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), String> {
+fn approve(input: &SimInput, sim: &SimResult, signer: Address, safe: Option<&sim_types::safe::State>) -> Result<(), String> {
     if !sim.error.is_empty() {
         return Err(format!("simulation rejected the input: {}", String::from_utf8_lossy(&sim.error)));
     }
@@ -112,8 +131,15 @@ fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), Str
         let why: Vec<String> = sim.policy.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
         return Err(format!("policy: {}", why.join("; ")));
     }
-    if input.tx.from != signer {
-        return Err(format!("tx is from {}, not this device ({signer})", input.tx.from));
+    match safe {
+        None if input.tx.from != signer => return Err(format!("tx is from {}, not this device ({signer})", input.tx.from)),
+        None => {}
+        Some(st) => {
+            let p = st.problems();
+            if !p.is_empty() {
+                return Err(format!("Safe {}: {}", input.tx.from, p.join("; ")));
+            }
+        }
     }
     if !matches!(input.chain_id, 1 | 11155111) {
         return Err(format!("chain {} not supported (mainnet and Sepolia only)", input.chain_id));
@@ -211,13 +237,13 @@ impl SignerLink {
 }
 
 /// Simulate, check the policy, and (if approved) have the signer sign.
-fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters) -> SignResult {
-    let (sim, updates) = run(raw, counters);
-    let mut out = SignResult { sim, ..Default::default() };
+/// `safe`: co-sign a Safe transaction (`tx.from` = the Safe) instead of signing our own.
+fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, safe: bool) -> SignResult {
     let Some(me) = signer.address() else {
-        out.refused = b"no signer attached".to_vec().into();
-        return out;
+        return SignResult { refused: b"no signer attached".to_vec().into(), ..Default::default() };
     };
+    let (sim, updates, safe_state) = run_as(raw, counters, safe.then_some(me));
+    let mut out = SignResult { sim, ..Default::default() };
     out.signer = me;
     let input: SimInput = match alloy_rlp::Decodable::decode(&mut &raw[..]) {
         Ok(i) => i,
@@ -226,7 +252,11 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters) -> Sig
             return out;
         }
     };
-    if let Err(e) = approve(&input, &out.sim, me) {
+    if safe && safe_state.is_none() {
+        out.refused = b"Safe state not verified".to_vec().into();
+        return out;
+    }
+    if let Err(e) = approve(&input, &out.sim, me, safe_state.as_ref()) {
         log::info!("verifier: refused to sign: {e}");
         out.refused = e.into_bytes().into();
         return out;
@@ -237,7 +267,12 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters) -> Sig
         out.refused = e.into_bytes().into();
         return out;
     }
-    let signed = signer.sign(SignJob { chain_id: input.chain_id, tx: input.tx });
+    let job = match &safe_state {
+        // the Safe nonce comes from the verified state, not from the host
+        Some(st) => SignJob { chain_id: input.chain_id, tx: input.tx, kind: SignJob::SAFE, safe_nonce: st.nonce },
+        None => SignJob { chain_id: input.chain_id, tx: input.tx, kind: SignJob::TX, safe_nonce: Default::default() },
+    };
+    let signed = signer.sign(job);
     if signed.is_empty() {
         out.refused = b"the signer refused".to_vec().into();
     } else {
@@ -322,9 +357,9 @@ fn main() -> ! {
                     alloy_rlp::encode(&error_result(format!("result ({n} B) larger than buffer ({cap} B)")))
                 });
             }
-            ipc::OP_SIGN => {
+            ipc::OP_SIGN | ipc::OP_SAFE_SIGN => {
                 let raw = unsafe { mem.buf.as_slice::<u8>()[..len].to_vec() };
-                let result = sign_request(&raw, &signer, &mut counters);
+                let result = sign_request(&raw, &signer, &mut counters, op == ipc::OP_SAFE_SIGN);
                 log_result(&result.sim);
                 reply(mem, alloy_rlp::encode(&result), |n, cap| {
                     let r = SignResult {

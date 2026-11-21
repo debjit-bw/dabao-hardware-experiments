@@ -341,11 +341,16 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
         }
     }
 
-    // network fee: what the simulation paid, and the most the signed tx can pay
-    if let Some(fee) = effects.iter().find(|e| e.kind == effect::GAS_FEE && e.from == tx.from) {
-        shown.add(b"Network fee (simulated)", shown.amount(Address::ZERO, fee.amount));
+    // network fee: what the simulation paid, and the most the signed tx can pay. Gas price 0 =
+    // a call made by a contract (a Safe's inner call): its executor pays, not the sender.
+    if tx.gas_price == 0 {
+        shown.add(b"Network fee", "paid by the executor, not by the sender".into());
+    } else {
+        if let Some(fee) = effects.iter().find(|e| e.kind == effect::GAS_FEE && e.from == tx.from) {
+            shown.add(b"Network fee (simulated)", shown.amount(Address::ZERO, fee.amount));
+        }
+        shown.add(b"Max network fee", shown.amount(Address::ZERO, U256::from(tx.gas_limit) * U256::from(tx.gas_price)));
     }
-    shown.add(b"Max network fee", shown.amount(Address::ZERO, U256::from(tx.gas_limit) * U256::from(tx.gas_price)));
 
     out.addresses = shown.addresses;
     out.fields = shown.fields;

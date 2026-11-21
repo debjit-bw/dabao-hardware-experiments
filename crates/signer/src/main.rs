@@ -24,7 +24,7 @@ fn address_of(key: &SigningKey) -> Address {
 
 /// Sign `job` (EIP-155 legacy, or EIP-1559 when it has a priority fee), or refuse.
 fn sign(key: &SigningKey, me: Address, job: &SignJob) -> Result<Vec<u8>, String> {
-    if job.tx.from != me {
+    if job.kind == SignJob::TX && job.tx.from != me {
         return Err(format!("job is for {}, not this device ({me})", job.tx.from));
     }
     let t = &job.tx;
@@ -33,6 +33,18 @@ fn sign(key: &SigningKey, me: Address, job: &SignJob) -> Result<Vec<u8>, String>
         let (r, s) = sig.split_bytes();
         Ok(Signature::from_scalars_and_parity(B256::from_slice(&r), B256::from_slice(&s), recid.is_y_odd()))
     };
+    if job.kind == SignJob::SAFE {
+        // co-sign a Safe transaction: the SafeTx hash, computed here from the approved fields
+        let hash = sim_types::safe::tx_hash(job.chain_id, t.from, t.to, t.value, &t.data, job.safe_nonce);
+        let sig = sign_hash(hash)?;
+        let mut out = sig.r().to_be_bytes::<32>().to_vec();
+        out.extend_from_slice(&sig.s().to_be_bytes::<32>());
+        out.push(27 + sig.v() as u8); // Safe: v 27/28 = ECDSA over the hash itself
+        return Ok(out);
+    }
+    if job.kind != SignJob::TX {
+        return Err(format!("unknown job kind {}", job.kind));
+    }
     let signed = match t.max_priority_fee_per_gas {
         None => {
             let tx = TxLegacy {
@@ -98,7 +110,11 @@ fn main() -> ! {
         let reply = match alloy_rlp::Decodable::decode(&mut &job_bytes[..]) {
             Ok(job) => match sign(&key, me, &job) {
                 Ok(raw) => {
-                    log::info!("signed nonce {} to {} ({} B)", job.tx.nonce, job.tx.to, raw.len());
+                    if job.kind == SignJob::SAFE {
+                        log::info!("co-signed Safe {} nonce {} to {}", job.tx.from, job.safe_nonce, job.tx.to);
+                    } else {
+                        log::info!("signed nonce {} to {} ({} B)", job.tx.nonce, job.tx.to, raw.len());
+                    }
                     raw
                 }
                 Err(e) => {
