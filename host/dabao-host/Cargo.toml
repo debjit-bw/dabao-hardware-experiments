@@ -11,6 +11,7 @@ sim-types = { path = "../../crates/sim-types" }
 xous-evm = { path = "../../crates/xous-evm" }
 clear-sign = { path = "../../crates/clear-sign" }
 policy = { path = "../../crates/policy" }
+light-client = { path = "../../crates/light-client" }
 serde_json = "1"
 alloy = { version = "2.4.2", default-features = false, features = ["providers", "provider-http", "rpc-types", "consensus", "k256", "json-abi", "reqwest-rustls-tls", "network", "signers", "signer-local", "sol-types", "rand"] }
 alloy-primitives = { version = "1.6.1" }

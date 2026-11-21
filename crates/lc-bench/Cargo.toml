@@ -1,0 +1,17 @@
+[package]
+name = "lc-bench"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Benchmark: verify a real Sepolia sync-committee signature (BLS12-381) on the Baochip"
+
+[[bin]]
+name = "lc-bench"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4.14"
+xous = "0.9.71"
+log-server = { package = "xous-api-log", version = "0.1.70" }
+light-client = { path = "../light-client" }
+alloy-rlp = { version = "0.3.16", default-features = false }

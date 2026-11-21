@@ -63,6 +63,7 @@ fn balance_of_calldata(who: Address) -> Bytes {
 }
 
 mod descriptors;
+mod lc;
 mod policy;
 mod replay;
 mod safe;
@@ -158,6 +159,7 @@ async fn main() -> Result<()> {
         ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
         ["status"] => send::status(tcp),
         ["policy"] => send::policy(tcp),
+        ["lc-fixture", out] => lc::fixture(out).await,
         ["compile-policy", out, input] => policy::compile(out, input),
         ["compile-descriptors", out, rest @ ..] if !rest.is_empty() => {
             descriptors::compile(out, &rest.iter().map(|s| s.to_string()).collect::<Vec<_>>())

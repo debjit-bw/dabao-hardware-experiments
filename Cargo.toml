@@ -6,6 +6,8 @@ members = [
     "crates/xous-evm",
     "crates/clear-sign",
     "crates/policy",
+    "crates/light-client",
+    "crates/lc-bench",
     "crates/verifier",
     "crates/transport",
     "crates/signer",
