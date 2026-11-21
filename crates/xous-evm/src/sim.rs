@@ -19,7 +19,7 @@ use revm::{
     primitives::TxKind,
     state::AccountInfo,
 };
-use sim_types::SimInput;
+use sim_types::{SimChange, SimInput, SimLog, SimResult, SlotChange};
 use stateless::ExecutionWitness;
 use tries::{StatelessTrie, WitnessDbError, zeth::SparseState};
 
@@ -59,23 +59,13 @@ impl Database for WitnessDb<'_> {
     }
 }
 
-/// What the simulation did, for logging (the effects inspector comes later).
-#[derive(Debug)]
-pub struct SimReport {
-    pub success: bool,
-    pub gas_used: u64,
-    pub output: Bytes,
-    pub logs: usize,
-    /// (address, balance before -> after, changed slots)
-    pub changes: Vec<(Address, U256, U256, usize)>,
-}
-
-pub fn simulate(raw: &[u8]) -> Result<SimReport, String> {
+/// Simulate the RLP `SimInput` in `raw`. Err = input rejected (fail closed).
+pub fn simulate(raw: &[u8]) -> Result<SimResult, String> {
     simulate_with(raw, |_| {})
 }
 
 /// Like `simulate`, but lets a test tamper with the decoded input first.
-pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<SimReport, String> {
+pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<SimResult, String> {
     let mut input = SimInput::decode(&mut &raw[..]).map_err(|e| format!("decode SimInput: {e}"))?;
     tamper(&mut input);
     let parent = Header::decode(&mut &input.parent_header[..]).map_err(|e| format!("decode header: {e}"))?;
@@ -129,21 +119,43 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         .build_mainnet();
     let out = evm.transact(tx).map_err(|e| format!("execution: {e:?}"))?;
 
-    let mut changes: Vec<_> = out
+    let mut changes: Vec<SimChange> = out
         .state
         .iter()
         .filter(|(_, acc)| acc.is_touched())
         .map(|(addr, acc)| {
-            let changed = acc.storage.values().filter(|s| s.is_changed()).count();
-            (*addr, acc.original_info().balance, acc.info.balance, changed)
+            let mut slots: Vec<SlotChange> = acc
+                .storage
+                .iter()
+                .filter(|(_, s)| s.is_changed())
+                .map(|(k, s)| SlotChange { slot: *k, before: s.original_value(), after: s.present_value() })
+                .collect();
+            slots.sort_by_key(|c| c.slot);
+            SimChange {
+                address: *addr,
+                balance_before: acc.original_info().balance,
+                balance_after: acc.info.balance,
+                nonce_before: acc.original_info().nonce,
+                nonce_after: acc.info.nonce,
+                slots,
+            }
         })
         .collect();
-    changes.sort();
-    Ok(SimReport {
+    changes.sort_by_key(|c| c.address);
+    let logs = out
+        .result
+        .logs()
+        .iter()
+        .map(|l| SimLog { address: l.address, topics: l.topics().to_vec(), data: l.data.data.clone() })
+        .collect();
+    Ok(SimResult {
+        error: Bytes::new(),
         success: out.result.is_success(),
         gas_used: out.result.tx_gas_used(),
         output: out.result.output().cloned().unwrap_or_default(),
-        logs: out.result.logs().len(),
+        logs,
         changes,
+        micros: 0,
+        peak_heap: 0,
     })
 }

@@ -1,9 +1,10 @@
 #!/bin/bash
-# Build a dabao device image: our engine as an XIP service in the system image
-# (xous.img), and one detached app (default: eth-burner) in the apps image.
+# Build a dabao device image. Default: the verifier (process 2) as an XIP service in the
+# system image (xous.img) and the transport (process 1, USB HID) in the apps image.
 #
 #   scripts/build-device.sh [path/to/app-elf | xous-core-app-crate] [extra xtask args...]
-#   GENERIC_HID=0 scripts/build-device.sh dabao-console   # USB serial console (logs mirrored), no HID
+#   SERVICE=engine-spike GENERIC_HID=0 scripts/build-device.sh dabao-console   # the benchmark spike,
+#                                    # with a USB serial console (logs mirrored), no HID
 #
 # Afterwards it checks both images against their real RRAM regions, because
 # xous-sign-image only checks the system image against the *end of RRAM*
@@ -16,7 +17,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 XOUS_CORE="${XOUS_CORE:-$here/../dabao-workshop/xous-core}"
 XOUS_CORE="$(cd "$XOUS_CORE" && pwd)"
-app="${1:-$XOUS_CORE/../ethereum-app/dabao-app-eth-burner/target/riscv32imac-unknown-xous-elf/release/eth-burner}"
+app="${1:-$here/target/riscv32imac-unknown-xous-elf/release/transport}"
 shift || true
 # paths are made absolute (xtask runs in $XOUS_CORE); bare names are xous-core app crates
 case "$app" in */*) app="$(cd "$(dirname "$app")" && pwd)/$(basename "$app")" ;; esac
@@ -33,8 +34,10 @@ usb_feature=(--feature usb-bao1x/generic-hid)
 SYSTEM_MAX=$(( 0x260000 ))   # APP_RRAM_START - KERNEL_START
 APPS_MAX=$(( 0xDA300 ))      # APP_RRAM_LEN
 
-(cd "$here" && cargo build --release -p engine-spike --target riscv32imac-unknown-xous-elf)
-engine="$here/target/riscv32imac-unknown-xous-elf/release/engine-spike"
+SERVICE="${SERVICE:-verifier}"
+(cd "$here" && cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf)
+(cd "$here" && cargo build --release -p transport --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
+engine="$here/target/riscv32imac-unknown-xous-elf/release/$SERVICE"
 
 # Upstream's Rust 1.100 fix (betrusted-io/xous-core#1023) keeps ONE target/SVD_PATH shared by
 # all targets. Any hosted build (e.g. `cargo xtask dabao-emu`) rewrites it empty, and a cached
@@ -46,7 +49,7 @@ if [ ! -s "$XOUS_CORE/target/SVD_PATH" ]; then
 fi
 
 (cd "$XOUS_CORE" && cargo xtask dabao "$app" ${usb_feature[@]+"${usb_feature[@]}"} \
-    --service "engine-spike~flash:$engine" "$@")
+    --service "$SERVICE~flash:$engine" "$@")
 
 out="$XOUS_CORE/target/riscv32imac-unknown-xous-elf/release"
 fail=0

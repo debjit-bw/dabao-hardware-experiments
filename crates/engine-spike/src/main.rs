@@ -6,8 +6,7 @@
 //! compared byte-for-byte against the expected output. Reports wall time and
 //! peak heap.
 
-mod chainspec;
-mod sim;
+use xous_evm::sim;
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -41,7 +40,7 @@ static GLOBAL: Counting = Counting;
 const SMOKE_IN: &[u8] = include_bytes!("../fixtures/guest-smoke.in.ssz");
 const SMOKE_OUT: &[u8] = include_bytes!("../fixtures/guest-smoke.out.ssz");
 /// Stage 3: WETH transfer(0x..dEaD, 1) on mainnet state; see host/witness-gen.
-const WETH_TRANSFER: &[u8] = include_bytes!("../fixtures/weth-transfer.rlp");
+const WETH_TRANSFER: &[u8] = include_bytes!("../../xous-evm/fixtures/weth-transfer.rlp");
 
 /// Runs `f`, returning its result, wall time and peak heap above the starting level.
 fn measure<T>(f: impl FnOnce() -> T) -> (T, std::time::Duration, usize) {
@@ -67,8 +66,8 @@ fn main() {
     let (sim, sim_t, sim_peak) = measure(|| sim::simulate(WETH_TRANSFER));
     let sim_line = match &sim {
         Ok(r) => format!(
-            "success={} gas_used={} output={} logs={} changes={:?}",
-            r.success, r.gas_used, r.output, r.logs, r.changes
+            "success={} gas_used={} output={} logs={} changes={}",
+            r.success, r.gas_used, r.output, r.logs.len(), r.changes.len()
         ),
         Err(e) => format!("ERROR {e}"),
     };

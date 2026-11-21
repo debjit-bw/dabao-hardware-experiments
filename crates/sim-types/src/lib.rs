@@ -51,3 +51,82 @@ pub struct SimTx {
     pub value: U256,
     pub data: Bytes,
 }
+
+/// Result of a simulation, as returned by the verifier. `error` non-empty means the input
+/// was rejected (decode failure, witness doesn't match the state root, missing witness data,
+/// invalid tx); then the other fields are meaningless.
+#[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct SimResult {
+    pub error: Bytes,
+    pub success: bool,
+    pub gas_used: u64,
+    pub output: Bytes,
+    pub logs: Vec<SimLog>,
+    pub changes: Vec<SimChange>,
+    /// Verifier-side cost of this request.
+    pub micros: u64,
+    pub peak_heap: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct SimLog {
+    pub address: Address,
+    pub topics: Vec<B256>,
+    pub data: Bytes,
+}
+
+/// A touched account: balance before/after and every storage slot whose value changed.
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct SimChange {
+    pub address: Address,
+    pub balance_before: U256,
+    pub balance_after: U256,
+    pub nonce_before: u64,
+    pub nonce_after: u64,
+    pub slots: Vec<SlotChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct SlotChange {
+    pub slot: U256,
+    pub before: U256,
+    pub after: U256,
+}
+
+/// Host <-> device framing (same envelope as eth-burner): `length (u32 BE) || type || message`;
+/// `length` counts `type || message`. Over USB HID it is cut into 64-byte reports, zero-padded.
+pub mod wire {
+    /// Largest `type || message` accepted (the frame is buffered whole in the transport).
+    pub const MAX_LEN: usize = 256 * 1024;
+    /// message: RLP `SimInput`; reply: RLP `SimResult`.
+    pub const TYPE_SIMULATE: u8 = 0x10;
+    /// message: empty; reply: UTF-8 version string.
+    pub const TYPE_VERSION: u8 = 0x11;
+    /// reply only: UTF-8 error from the transport (bad frame, unknown type, verifier down).
+    pub const TYPE_ERROR: u8 = 0x7f;
+
+    pub fn encode_frame(ty: u8, message: &[u8]) -> alloc::vec::Vec<u8> {
+        let mut out = alloc::vec::Vec::with_capacity(5 + message.len());
+        out.extend_from_slice(&(message.len() as u32 + 1).to_be_bytes());
+        out.push(ty);
+        out.extend_from_slice(message);
+        out
+    }
+
+    /// Length announced by a prefix, if acceptable.
+    pub fn frame_len(prefix: [u8; 4]) -> Option<usize> {
+        match u32::from_be_bytes(prefix) as usize {
+            0 => None,
+            n if n > MAX_LEN => None,
+            n => Some(n),
+        }
+    }
+}
+
+/// Transport -> verifier IPC (Xous). The transport lends a buffer holding RLP `SimInput`
+/// (`valid` = its length); the verifier writes RLP `SimResult` into the same buffer and
+/// returns it with `valid` = the result length.
+pub mod ipc {
+    pub const VERIFIER_SERVER_NAME: &str = "_EVM verifier_";
+    pub const OP_SIMULATE: usize = 1;
+}

@@ -1,9 +1,9 @@
 [package]
-name = "witness-gen"
+name = "dabao-host"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Build a SimInput (tx + eth_getProof witness) for the on-device simulator from a JSON-RPC node"
+description = "Host companion: build SimInputs from a JSON-RPC node (eth_getProof) and send them to the Dabao verifier"
 
 [dependencies]
 sim-types = { path = "../../crates/sim-types" }
@@ -11,4 +11,5 @@ alloy = { version = "2.4.2", default-features = false, features = ["providers", 
 alloy-primitives = { version = "1.6.1" }
 alloy-rlp = { version = "0.3.16" }
 anyhow = "1.0"
+hidapi = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

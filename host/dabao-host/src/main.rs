@@ -1,8 +1,12 @@
-//! Build a `SimInput` for one real ERC-20 transfer: a WETH `transfer(0x…dEaD, 1)` from a
-//! WETH holder seen in the latest block, simulated on top of that block's post-state.
+//! Host companion for the Dabao verifier.
 //!
-//!   cargo run -p witness-gen -- <out.rlp>        (RPC_URL defaults to publicnode)
+//!   dabao-host build <out.rlp>              build a SimInput from a JSON-RPC node (RPC_URL,
+//!                                           default publicnode): WETH transfer(0x…dEaD, 1)
+//!   dabao-host send <in.rlp> [--tcp ADDR]   send it to the device (USB HID) or the emulator
+//!                                           (TCP, e.g. 127.0.0.1:7610) and print the SimResult
 //!
+//! `build`: a WETH `transfer(0x…dEaD, 1)` from a WETH holder seen in the latest block,
+//! simulated on top of that block's post-state.
 //! Witness = union of `eth_getProof` account + storage proof nodes for every account and
 //! slot that `eth_createAccessList` reports, plus sender, recipient and beneficiary.
 //! Also prints what the node itself says the call returns, to compare with the device.
@@ -42,9 +46,27 @@ fn balance_of_calldata(who: Address) -> Bytes {
     d.into()
 }
 
+mod send;
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let out = std::env::args().nth(1).context("usage: witness-gen <out.rlp>")?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("build") => build(args.get(1).context("usage: dabao-host build <out.rlp>")?).await,
+        Some("send") => {
+            let path = args.get(1).context("usage: dabao-host send <in.rlp> [--tcp ADDR]")?;
+            let tcp = match args.get(2).map(String::as_str) {
+                Some("--tcp") => Some(args.get(3).context("--tcp needs an address")?.clone()),
+                Some(other) => bail!("unknown option {other}"),
+                None => None,
+            };
+            send::send(&std::fs::read(path)?, tcp.as_deref())
+        }
+        _ => bail!("usage: dabao-host build <out.rlp> | send <in.rlp> [--tcp ADDR]"),
+    }
+}
+
+async fn build(out: &str) -> Result<()> {
     let url = std::env::var("RPC_URL").unwrap_or_else(|_| "https://ethereum-rpc.publicnode.com".into());
     let p = ProviderBuilder::new().connect_http(url.parse()?);
 

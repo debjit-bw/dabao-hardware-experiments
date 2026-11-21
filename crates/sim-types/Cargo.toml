@@ -6,5 +6,5 @@ license = "MIT OR Apache-2.0"
 description = "Wire format between the host witness generator and the on-device simulator"
 
 [dependencies]
-alloy-primitives = { version = "1.6.1", default-features = false }
+alloy-primitives = { version = "1.6.1", default-features = false, features = ["rlp"] }
 alloy-rlp = { version = "0.3.16", default-features = false, features = ["derive"] }
