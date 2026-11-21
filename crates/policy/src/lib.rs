@@ -10,9 +10,9 @@
 //!   allowance the sender grants (at its full amount: an allowance is spending authority), plus
 //!   the maximum network fee for ETH. Measured from effects, not from calldata, so a router or
 //!   multicall can't hide it.
-//! * Time: a day is `block.timestamp / 86400` of the block the host says comes next. Until the
-//!   light client exists that timestamp is host-supplied (untrusted): a lying host can start a
-//!   new "day" early. Documented, not solved.
+//! * Time: a day is `block.timestamp / 86400` of the simulated block, which the verifier
+//!   requires to be the light-client-proven parent's timestamp + 12 s (signing is refused
+//!   without that proof), so the clock is as trustworthy as the sync committee.
 
 use alloy_primitives::{Address, Bytes, U256, keccak256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
@@ -236,7 +236,7 @@ pub fn evaluate(p: &Policy, counters: &[Counter], tokens: &DescriptorSet, input:
             updates.push((i, Counter { id: c.id, day, spent: after.to::<u128>() }));
         }
     }
-    notes.push(format!("day {day} (from the host-supplied block time: untrusted until the light client)"));
+    notes.push(format!("day {day} (block time follows the parent header: trusted once the light client proved it)"));
     done(v, notes, updates)
 }
 

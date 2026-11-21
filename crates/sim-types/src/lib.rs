@@ -14,7 +14,10 @@ use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 
 /// One transaction to simulate on top of the post-state of `parent_header`.
+/// `lc`: the light-client proof that `parent_header` is canonical (a sync-committee-signed
+/// beacon header whose body commits to its hash). Trailing, so inputs without it still decode.
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+#[rlp(trailing)]
 pub struct SimInput {
     pub chain_id: u64,
     /// RLP-encoded header of the block whose post-state we execute on. Its
@@ -29,6 +32,74 @@ pub struct SimInput {
     pub codes: Vec<Bytes>,
     /// Address and slot preimages, as `ExecutionWitness::keys`.
     pub keys: Vec<Bytes>,
+    pub lc: Option<lc::HeaderProof>,
+}
+
+/// Light-client wire types (consensus-layer data the device verifies; see `crates/light-client`).
+pub mod lc {
+    use alloc::vec::Vec;
+    use alloy_primitives::{B256, Bytes};
+    use alloy_rlp::{RlpDecodable, RlpEncodable};
+
+    /// `BeaconBlockHeader`.
+    #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+    pub struct BeaconHeader {
+        pub slot: u64,
+        pub proposer_index: u64,
+        pub parent_root: B256,
+        pub state_root: B256,
+        pub body_root: B256,
+    }
+
+    /// A sync committee's signature over `attested` (bits: SSZ Bitvector[512]).
+    #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+    pub struct Signed {
+        pub attested: BeaconHeader,
+        pub signature_slot: u64,
+        pub bits: Bytes,
+        pub signature: Bytes,
+    }
+
+    /// Proof that an execution block is canonical: `signed.attested` is signed by the current
+    /// sync committee, and `execution_branch` proves `execution_block_hash` into its body.
+    #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+    pub struct HeaderProof {
+        pub signed: Signed,
+        pub execution_block_hash: B256,
+        pub execution_branch: Vec<B256>,
+    }
+
+    /// A sync committee (512 compressed keys + aggregate key), checked by the device against the
+    /// committee root it stores.
+    #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+    pub struct Committee {
+        pub period: u64,
+        pub pubkeys: Vec<Bytes>,
+        pub aggregate: Bytes,
+    }
+
+    /// Hand-off to the next period: signed by the current committee, `next` proven into the
+    /// attested header's state by `next_branch`.
+    #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+    pub struct CommitteeUpdate {
+        pub signed: Signed,
+        pub next: Committee,
+        pub next_branch: Vec<B256>,
+    }
+
+    /// Reply to the light-client requests.
+    #[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+    pub struct Status {
+        /// The period whose committee root the device trusts.
+        pub period: u64,
+        pub committee_root: B256,
+        /// That committee's keys are loaded (uploaded since boot).
+        pub loaded: bool,
+        /// Highest beacon slot verified (headers older than this are refused).
+        pub highest_slot: u64,
+        /// What happened / why a request was refused (empty: ok).
+        pub note: Bytes,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
@@ -87,6 +158,8 @@ pub struct SimResult {
     pub clear_sign: ClearSign,
     /// The device's signing policy (filled in by the verifier).
     pub policy: PolicyCheck,
+    /// Light client: whether `parent_header` was proven canonical (empty: verified).
+    pub header_check: Bytes,
 }
 
 /// Result of the signing policy (`crates/policy`). Signing requires `violations` empty.
@@ -422,6 +495,13 @@ pub mod wire {
     /// ignored: the executor pays); reply: RLP `SignResult` with `signed_tx` = the device's
     /// 65-byte owner signature (r || s || v, v = 27/28) over the SafeTx hash.
     pub const TYPE_SAFE_SIGN: u8 = 0x16;
+    /// message: RLP `lc::Committee`; reply: RLP `lc::Status` (keys loaded if they hash to the
+    /// stored committee root).
+    pub const TYPE_LC_COMMITTEE: u8 = 0x17;
+    /// message: RLP `lc::CommitteeUpdate`; reply: RLP `lc::Status` (moved to the next period).
+    pub const TYPE_LC_UPDATE: u8 = 0x18;
+    /// message: empty; reply: RLP `lc::Status`.
+    pub const TYPE_LC_STATUS: u8 = 0x19;
     /// reply only: UTF-8 error from the transport (bad frame, unknown type, verifier down).
     pub const TYPE_ERROR: u8 = 0x7f;
 
@@ -465,6 +545,10 @@ pub mod ipc {
     pub const OP_POLICY: usize = 5;
     /// RLP `SimInput` (Safe inner call) -> RLP `SignResult` (65-byte Safe owner signature).
     pub const OP_SAFE_SIGN: usize = 6;
+    /// RLP `lc::Committee` / `lc::CommitteeUpdate` / empty -> RLP `lc::Status`.
+    pub const OP_LC_COMMITTEE: usize = 7;
+    pub const OP_LC_UPDATE: usize = 8;
+    pub const OP_LC_STATUS: usize = 9;
     pub const OP_SIGNER_WAIT: usize = 10;
     pub const OP_SIGNER_RESULT: usize = 11;
 }

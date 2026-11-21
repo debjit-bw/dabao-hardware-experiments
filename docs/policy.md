@@ -71,10 +71,11 @@ Every `sign` / `send-tx` prints the policy's notes (e.g. "ETH: 0.00103 ETH this 
 
 ## Limits / next
 
-- **Time is host-supplied.** A day is `block.timestamp / 86400` of the next block, built
-  from the parent header the host provides. Until the light client verifies that header, a
-  lying host can start a new "day" early and get a fresh limit. The light client fixes this,
-  and it's the main reason trusted time is on the plan.
+- **Time comes from the light client.** A day is `block.timestamp / 86400` of the simulated
+  block, which must be the parent's timestamp + 12 s, and the parent header must be proven
+  canonical by the sync committee (docs/light-client.md), or nothing is signed. A host can't
+  move the clock forward. It can only replay an older header, and the slot ratchet refuses
+  that once anything newer has been signed.
 - Limits are per calendar day (UTC), not rolling 24 hours.
 - Allowances are counted when granted and the later `transferFrom` is counted again, so
   approve-then-swap is double-counted. That's conservative; tracking allowances properly

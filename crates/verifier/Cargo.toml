@@ -18,6 +18,8 @@ sim-types = { path = "../sim-types" }
 xous-evm = { path = "../xous-evm" }
 clear-sign = { path = "../clear-sign" }
 policy = { path = "../policy" }
+light-client = { path = "../light-client" }
+alloy-consensus = { version = "2.4.2", default-features = false }
 alloy-rlp = { version = "0.3.16", default-features = false }
 alloy-primitives = { version = "1.6.1", default-features = false }
 

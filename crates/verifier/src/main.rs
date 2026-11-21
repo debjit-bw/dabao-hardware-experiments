@@ -19,6 +19,8 @@ use std::sync::{
 };
 
 mod counters;
+mod lc;
+mod slots;
 
 use alloy_primitives::Address;
 use counters::Counters;
@@ -54,14 +56,38 @@ fn error_result(e: impl Into<String>) -> SimResult {
 /// check and the policy. Returns the result and the policy counters to persist if it is signed.
 /// Inputs whose estimated peak memory doesn't fit are rejected up front: running out of memory
 /// aborts the verifier, which would leave the device stuck until RESET.
-fn run(input: &[u8], counters: &Counters) -> (SimResult, Vec<(usize, policy::Counter)>) {
-    let (r, u, _) = run_as(input, counters, None);
+fn run(input: &[u8], counters: &Counters, lc: &lc::LightClient) -> (SimResult, Vec<(usize, policy::Counter)>) {
+    let (r, u, _, _) = run_as(input, counters, lc, None);
     (r, u)
+}
+
+/// The light-client check of `inp`'s parent header: proven canonical by the sync committee, and
+/// the simulated block follows it (so the block time the policy uses is trusted too). Returns
+/// the attested beacon slot.
+fn header_check(inp: &SimInput, lc: &lc::LightClient) -> Result<u64, String> {
+    let Some(p) = &inp.lc else {
+        return Err("no light-client proof: the host-supplied parent header is not trusted".into());
+    };
+    let slot = lc.check(p, alloy_primitives::keccak256(&inp.parent_header))?;
+    let parent = <alloy_consensus::Header as alloy_rlp::Decodable>::decode(&mut &inp.parent_header[..]).map_err(|e| format!("parent header: {e}"))?;
+    if inp.block.number != parent.number + 1 || inp.block.timestamp != parent.timestamp + 12 {
+        return Err(format!(
+            "simulated block {} at {} does not follow the verified parent {} at {}",
+            inp.block.number, inp.block.timestamp, parent.number, parent.timestamp
+        ));
+    }
+    Ok(slot)
 }
 
 /// `run`; with `safe_owner = Some(device)`, `tx.from` is a Safe: the call is simulated as made
 /// by the Safe, and its configuration is read from the verified pre-state.
-fn run_as(input: &[u8], counters: &Counters, safe_owner: Option<Address>) -> (SimResult, Vec<(usize, policy::Counter)>, Option<sim_types::safe::State>) {
+#[allow(clippy::type_complexity)]
+fn run_as(
+    input: &[u8],
+    counters: &Counters,
+    lc: &lc::LightClient,
+    safe_owner: Option<Address>,
+) -> (SimResult, Vec<(usize, policy::Counter)>, Option<sim_types::safe::State>, Option<u64>) {
     let max = MAX_INPUT;
     if input.len() > max {
         let e = error_result(format!(
@@ -69,15 +95,19 @@ fn run_as(input: &[u8], counters: &Counters, safe_owner: Option<Address>) -> (Si
             input.len(),
             estimated_peak(input.len()) / 1024
         ));
-        return (e, vec![], None);
+        return (e, vec![], None, None);
     }
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
     let start = Instant::now();
+    let verified = match <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
+        Ok(inp) => header_check(&inp, lc),
+        Err(e) => Err(format!("decode SimInput: {e}")),
+    };
     let mut opts = xous_evm::sim::Options::default();
     if let Some(device) = safe_owner {
         let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) else {
-            return (error_result("decode SimInput"), vec![], None);
+            return (error_result("decode SimInput"), vec![], None, None);
         };
         opts.as_contract = true;
         opts.reads = sim_types::safe::slots(device).iter().map(|s| (inp.tx.from, *s)).collect();
@@ -101,9 +131,12 @@ fn run_as(input: &[u8], counters: &Counters, safe_owner: Option<Address>) -> (Si
             updates = out.updates;
         }
     }
+    if let Err(e) = &verified {
+        r.header_check = e.clone().into_bytes().into();
+    }
     r.micros = start.elapsed().as_micros() as u64;
     r.peak_heap = (PEAK.load(Relaxed) - base) as u64;
-    (r, updates, safe)
+    (r, updates, safe, verified.ok())
 }
 
 /// The signing policy compiled into the firmware (crates/policy/policy.bin).
@@ -126,6 +159,9 @@ fn approve(input: &SimInput, sim: &SimResult, signer: Address, safe: Option<&sim
     if cs.descriptor.is_empty() || !cs.violations.is_empty() {
         let why: Vec<String> = cs.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
         return Err(format!("ERC-7730 check failed: {}", if why.is_empty() { "no descriptor matched".into() } else { why.join("; ") }));
+    }
+    if !sim.header_check.is_empty() {
+        return Err(format!("light client: {}", String::from_utf8_lossy(&sim.header_check)));
     }
     if !sim.policy.violations.is_empty() {
         let why: Vec<String> = sim.policy.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
@@ -238,11 +274,11 @@ impl SignerLink {
 
 /// Simulate, check the policy, and (if approved) have the signer sign.
 /// `safe`: co-sign a Safe transaction (`tx.from` = the Safe) instead of signing our own.
-fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, safe: bool) -> SignResult {
+fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, lc: &mut lc::LightClient, safe: bool) -> SignResult {
     let Some(me) = signer.address() else {
         return SignResult { refused: b"no signer attached".to_vec().into(), ..Default::default() };
     };
-    let (sim, updates, safe_state) = run_as(raw, counters, safe.then_some(me));
+    let (sim, updates, safe_state, slot) = run_as(raw, counters, lc, safe.then_some(me));
     let mut out = SignResult { sim, ..Default::default() };
     out.signer = me;
     let input: SimInput = match alloy_rlp::Decodable::decode(&mut &raw[..]) {
@@ -265,6 +301,11 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, safe: 
     if let Err(e) = counters.commit(&updates) {
         log::error!("verifier: {e}");
         out.refused = e.into_bytes().into();
+        return out;
+    }
+    // and never accept an older header again
+    if !slot.is_some_and(|s| lc.ratchet(s)) {
+        out.refused = b"can't persist the light client's highest slot".to_vec().into();
         return out;
     }
     let job = match &safe_state {
@@ -335,6 +376,7 @@ fn main() -> ! {
     raise_heap_limit();
     // claim and load the policy counters before registering the server (before any host input)
     let mut counters = Counters::open(&POLICY);
+    let mut lc = lc::LightClient::open();
     let xns = xous_names::XousNames::new().unwrap();
     let signer = start_signer_channel(&xns);
     let sid = xns.register_name(ipc::VERIFIER_SERVER_NAME, Some(1)).expect("can't register verifier");
@@ -351,7 +393,7 @@ fn main() -> ! {
         match op {
             ipc::OP_SIMULATE => {
                 // safety: the kernel mapped the buffer for us; we only read the first `len` bytes
-                let (result, _) = run(unsafe { &mem.buf.as_slice::<u8>()[..len] }, &counters);
+                let (result, _) = run(unsafe { &mem.buf.as_slice::<u8>()[..len] }, &counters, &lc);
                 log_result(&result);
                 reply(mem, alloy_rlp::encode(&result), |n, cap| {
                     alloy_rlp::encode(&error_result(format!("result ({n} B) larger than buffer ({cap} B)")))
@@ -359,7 +401,7 @@ fn main() -> ! {
             }
             ipc::OP_SIGN | ipc::OP_SAFE_SIGN => {
                 let raw = unsafe { mem.buf.as_slice::<u8>()[..len].to_vec() };
-                let result = sign_request(&raw, &signer, &mut counters, op == ipc::OP_SAFE_SIGN);
+                let result = sign_request(&raw, &signer, &mut counters, &mut lc, op == ipc::OP_SAFE_SIGN);
                 log_result(&result.sim);
                 reply(mem, alloy_rlp::encode(&result), |n, cap| {
                     let r = SignResult {
@@ -375,6 +417,21 @@ fn main() -> ! {
                     heap_limit: HEAP_LIMIT as u64,
                     max_input: MAX_INPUT as u64,
                     signer: signer.address().map(|a| a.to_vec()).unwrap_or_default().into(),
+                };
+                reply(mem, alloy_rlp::encode(&st), |_, _| Vec::new());
+            }
+            ipc::OP_LC_COMMITTEE | ipc::OP_LC_UPDATE | ipc::OP_LC_STATUS => {
+                let msg = unsafe { &mem.buf.as_slice::<u8>()[..len] };
+                let st = match op {
+                    ipc::OP_LC_COMMITTEE => match alloy_rlp::Decodable::decode(&mut &msg[..]) {
+                        Ok(c) => lc.load(&c),
+                        Err(e) => lc.status(format!("decode committee: {e}")),
+                    },
+                    ipc::OP_LC_UPDATE => match alloy_rlp::Decodable::decode(&mut &msg[..]) {
+                        Ok(u) => lc.update(&u),
+                        Err(e) => lc.status(format!("decode update: {e}")),
+                    },
+                    _ => lc.status(""),
                 };
                 reply(mem, alloy_rlp::encode(&st), |_, _| Vec::new());
             }

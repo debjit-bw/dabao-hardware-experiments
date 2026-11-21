@@ -12,7 +12,7 @@ const VERSION: &str = concat!("dabao-verifier transport ", env!("CARGO_PKG_VERSI
 
 /// How long the transport waits for the verifier. A verifier that dies or stalls mid-request
 /// never returns the lent buffer; without a bound the HID loop (and the host) would wait forever.
-const VERIFIER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const VERIFIER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// A lend to the verifier: opcode, the buffer (request in, reply out), request length.
 struct Job(usize, xous::MemoryRange, usize);
@@ -112,6 +112,17 @@ fn handle(body: &[u8], verifier: &Verifier) -> Vec<u8> {
             Ok(st) => wire::encode_frame(wire::TYPE_STATUS, &st),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
         },
+        wire::TYPE_LC_COMMITTEE | wire::TYPE_LC_UPDATE | wire::TYPE_LC_STATUS => {
+            let op = match ty {
+                wire::TYPE_LC_COMMITTEE => ipc::OP_LC_COMMITTEE,
+                wire::TYPE_LC_UPDATE => ipc::OP_LC_UPDATE,
+                _ => ipc::OP_LC_STATUS,
+            };
+            match verifier.call(op, message) {
+                Ok(st) => wire::encode_frame(ty, &st),
+                Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
+            }
+        }
         wire::TYPE_POLICY => match verifier.call(ipc::OP_POLICY, &[]) {
             Ok(st) => wire::encode_frame(wire::TYPE_POLICY, &st),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),

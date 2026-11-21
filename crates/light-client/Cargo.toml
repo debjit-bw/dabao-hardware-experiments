@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 description = "Ethereum (Sepolia) sync-committee light client pieces: SSZ header roots, signing domains, BLS12-381 sync-aggregate verification (arkworks, already in the firmware via revm's EIP-2537 precompiles)"
 
 [dependencies]
+sim-types = { path = "../sim-types" }
 ark-bls12-381 = { version = "0.6", default-features = false, features = ["curve"] }
 ark-ec = { version = "0.6", default-features = false }
 ark-ff = { version = "0.6", default-features = false }

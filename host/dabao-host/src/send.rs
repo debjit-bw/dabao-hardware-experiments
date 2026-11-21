@@ -66,6 +66,12 @@ pub fn policy(tcp: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// A light-client request (`TYPE_LC_*`); returns the device's light-client status.
+pub fn lc(ty: u8, message: &[u8], tcp: Option<&str>) -> Result<sim_types::lc::Status> {
+    let (st, _) = exchange(ty, message, ty, tcp)?;
+    Ok(alloy_rlp::Decodable::decode(&mut &st[..]).context("decode lc::Status")?)
+}
+
 pub fn address(tcp: Option<&str>) -> Result<Address> {
     let (a, _) = exchange(wire::TYPE_ADDRESS, &[], wire::TYPE_ADDRESS, tcp)?;
     if a.len() != 20 {
@@ -254,6 +260,11 @@ fn print_sim(r: &SimResult, chain_id: u64) {
     }
     for w in &cs.warnings {
         println!("  WARNING {}", s(w));
+    }
+    if r.header_check.is_empty() {
+        println!("light client: parent header proven canonical (sync committee + execution branch)");
+    } else {
+        println!("light client: HEADER NOT VERIFIED: {}", s(&r.header_check));
     }
     let p = &r.policy;
     println!("policy '{}':", s(&p.policy));

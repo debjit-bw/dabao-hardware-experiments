@@ -78,5 +78,5 @@ dabao-host safe info
   hash is built with operation 0.
 - The agent + recovery keys can execute without the device. That's intended (the human
   override), but it means the recovery key must really be kept offline.
-- The device trusts the parent header (no light client yet), so a lying host could simulate
-  against a fake state.
+- The parent header is proven canonical by the light client (docs/light-client.md), the same
+  as for the device's own transactions.

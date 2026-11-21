@@ -11,6 +11,7 @@
 
 use alloy_primitives::{B256, Bytes};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
+pub use sim_types::lc::{BeaconHeader, CommitteeUpdate, HeaderProof, Signed};
 use ark_bls12_381::{Bls12_381, G1Affine, G1Projective, G2Affine, G2Projective, g2};
 use ark_ec::{
     AffineRepr, CurveGroup,
@@ -62,25 +63,53 @@ fn u64_leaf(x: u64) -> [u8; 32] {
     l
 }
 
-/// `BeaconBlockHeader` (phase0 container, unchanged since).
-#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
-pub struct BeaconHeader {
-    pub slot: u64,
-    pub proposer_index: u64,
-    pub parent_root: B256,
-    pub state_root: B256,
-    pub body_root: B256,
+/// SSZ `hash_tree_root` of a `BeaconBlockHeader`: 5 fields padded to 8 leaves.
+pub fn header_root(h: &BeaconHeader) -> B256 {
+    let z = [0u8; 32];
+    let l = [u64_leaf(h.slot), u64_leaf(h.proposer_index), h.parent_root.0, h.state_root.0, h.body_root.0, z, z, z];
+    let a = [sha(&l[0], &l[1]), sha(&l[2], &l[3]), sha(&l[4], &l[5]), sha(&l[6], &l[7])];
+    let b = [sha(&a[0], &a[1]), sha(&a[2], &a[3])];
+    B256::from(sha(&b[0], &b[1]))
 }
 
-impl BeaconHeader {
-    /// SSZ `hash_tree_root`: 5 fields padded to 8 leaves.
-    pub fn hash_tree_root(&self) -> B256 {
-        let z = [0u8; 32];
-        let l = [u64_leaf(self.slot), u64_leaf(self.proposer_index), self.parent_root.0, self.state_root.0, self.body_root.0, z, z, z];
-        let a = [sha(&l[0], &l[1]), sha(&l[2], &l[3]), sha(&l[4], &l[5]), sha(&l[6], &l[7])];
-        let b = [sha(&a[0], &a[1]), sha(&a[2], &a[3])];
-        B256::from(sha(&b[0], &b[1]))
+/// Generalized indices (Gloas; measured on real Sepolia proofs, 2026-11-22):
+/// `current_sync_committee` / `next_sync_committee` in `BeaconState`, the execution block
+/// hash in `BeaconBlockBody`.
+pub const GINDEX_CURRENT_SYNC_COMMITTEE: u64 = 2945;
+pub const GINDEX_NEXT_SYNC_COMMITTEE: u64 = 2946;
+pub const GINDEX_EXECUTION_BLOCK_HASH: u64 = 2856;
+/// The gindices above hold from Gloas on.
+pub const GLOAS_EPOCH: u64 = 353_024;
+
+/// SSZ Merkle branch: does `leaf` at generalized index `gindex` hash up to `root`?
+pub fn verify_branch(leaf: B256, branch: &[B256], gindex: u64, root: B256) -> bool {
+    let depth = 63 - gindex.leading_zeros() as usize;
+    if branch.len() != depth {
+        return false;
     }
+    let mut v = leaf.0;
+    for (i, s) in branch.iter().enumerate() {
+        v = if gindex >> i & 1 == 1 { sha(s.as_slice(), &v) } else { sha(&v, s.as_slice()) };
+    }
+    B256::from(v) == root
+}
+
+fn pubkey_root(pk: &[u8]) -> [u8; 32] {
+    let mut hi = [0u8; 32];
+    hi[..pk.len().saturating_sub(32).min(32)].copy_from_slice(&pk[32.min(pk.len())..]);
+    sha(&pk[..32.min(pk.len())], &hi)
+}
+
+/// SSZ `hash_tree_root` of a `SyncCommittee { pubkeys: Vector[BLSPubkey, 512], aggregate_pubkey }`.
+pub fn committee_root(pubkeys: &[Bytes], aggregate: &[u8]) -> Result<B256, String> {
+    if pubkeys.len() != SYNC_COMMITTEE_SIZE || pubkeys.iter().any(|k| k.len() != 48) || aggregate.len() != 48 {
+        return Err("a sync committee is 512 keys of 48 bytes + a 48-byte aggregate".into());
+    }
+    let mut layer: Vec<[u8; 32]> = pubkeys.iter().map(|k| pubkey_root(k)).collect();
+    while layer.len() > 1 {
+        layer = layer.chunks(2).map(|p| sha(&p[0], &p[1])).collect();
+    }
+    Ok(B256::from(sha(&layer[0], &pubkey_root(aggregate))))
 }
 
 /// `compute_domain(DOMAIN_SYNC_COMMITTEE, fork_version, genesis_validators_root)`.
@@ -99,20 +128,40 @@ pub fn signing_root(header: &BeaconHeader, signature_slot: u64) -> B256 {
     // the spec takes the fork at the epoch of signature_slot - 1
     let epoch = signature_slot.max(1).saturating_sub(1) / SLOTS_PER_EPOCH;
     let domain = sync_committee_domain(sepolia::fork_version(epoch), sepolia::GENESIS_VALIDATORS_ROOT);
-    B256::from(sha(header.hash_tree_root().as_slice(), &domain))
+    B256::from(sha(header_root(header).as_slice(), &domain))
 }
 
 pub fn period(slot: u64) -> u64 {
     slot / SLOTS_PER_EPOCH / EPOCHS_PER_SYNC_COMMITTEE_PERIOD
 }
 
-/// A sync committee's public keys, decompressed and subgroup-checked once (then reusable for
-/// every header of the period, ~27 h on Ethereum).
+/// A sync committee's public keys, decompressed once (then reusable for every header of the
+/// period, ~27 h on Ethereum).
 pub struct Committee {
+    pub period: u64,
+    pub root: B256,
     pub pubkeys: Vec<G1Affine>,
 }
 
 impl Committee {
+    /// Keys uploaded by the (untrusted) host for `period`, accepted only if they hash to
+    /// `expected_root` (the root the device trusts for that period). Decompressed without the
+    /// subgroup check: keys committed to by a canonical beacon state were validated on deposit
+    /// (with a proof of possession), and the root pins exactly those keys.
+    pub fn load(c: &sim_types::lc::Committee, expected_root: B256) -> Result<Committee, String> {
+        let root = committee_root(&c.pubkeys, &c.aggregate)?;
+        if root != expected_root {
+            return Err(format!("committee for period {} hashes to {root}, expected {expected_root}", c.period));
+        }
+        let pubkeys = c
+            .pubkeys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| G1Affine::deserialize_compressed_unchecked(&k[..]).map_err(|e| format!("pubkey {i}: {e}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Committee { period: c.period, root, pubkeys })
+    }
+
     pub fn from_compressed(keys: &[Bytes]) -> Result<Committee, String> {
         if keys.len() != SYNC_COMMITTEE_SIZE {
             return Err(format!("{} keys, expected {SYNC_COMMITTEE_SIZE}", keys.len()));
@@ -122,8 +171,47 @@ impl Committee {
             .enumerate()
             .map(|(i, k)| G1Affine::deserialize_compressed(&k[..]).map_err(|e| format!("pubkey {i}: {e}")))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Committee { pubkeys })
+        Ok(Committee { period: u64::MAX, root: B256::ZERO, pubkeys })
     }
+}
+
+/// Check `s` is signed by `c` (the committee of `period(s.signature_slot)`, 2/3 participation),
+/// with the attested header no later than the signature slot and from Gloas on.
+pub fn verify_signed(c: &Committee, s: &Signed, now: &dyn Fn() -> u64) -> Result<Timing, String> {
+    if period(s.signature_slot) != c.period {
+        return Err(format!("signed in period {}, the device has the committee of period {}", period(s.signature_slot), c.period));
+    }
+    if s.attested.slot >= s.signature_slot {
+        return Err("attested header not before its signature slot".into());
+    }
+    if s.attested.slot / SLOTS_PER_EPOCH < GLOAS_EPOCH {
+        return Err("pre-Gloas header (proof layout not supported)".into());
+    }
+    verify_sync_aggregate(c, &s.bits, &s.signature, signing_root(&s.attested, s.signature_slot), now)
+}
+
+/// A header proof: the execution block hash it proves canonical (signed by the committee,
+/// committed to by the signed header's body).
+pub fn verify_header_proof(c: &Committee, p: &HeaderProof, now: &dyn Fn() -> u64) -> Result<Timing, String> {
+    let t = verify_signed(c, &p.signed, now)?;
+    if !verify_branch(p.execution_block_hash, &p.execution_branch, GINDEX_EXECUTION_BLOCK_HASH, p.signed.attested.body_root) {
+        return Err("execution block hash not in the signed header's body".into());
+    }
+    Ok(t)
+}
+
+/// A committee hand-off: returns the next period's committee root if `u` is signed by `c`
+/// and proves `u.next` into the attested state, with the attested header in `c`'s period.
+pub fn verify_update(c: &Committee, u: &CommitteeUpdate, now: &dyn Fn() -> u64) -> Result<B256, String> {
+    if period(u.signed.attested.slot) != c.period || u.next.period != c.period + 1 {
+        return Err(format!("update for period {} -> {}, device is at {}", period(u.signed.attested.slot), u.next.period, c.period));
+    }
+    verify_signed(c, &u.signed, now)?;
+    let next = committee_root(&u.next.pubkeys, &u.next.aggregate)?;
+    if !verify_branch(next, &u.next_branch, GINDEX_NEXT_SYNC_COMMITTEE, u.signed.attested.state_root) {
+        return Err("next sync committee not in the signed header's state".into());
+    }
+    Ok(next)
 }
 
 /// Participants in an SSZ `Bitvector[512]` (bit i = byte i/8, bit i%8).
@@ -179,3 +267,4 @@ pub struct Fixture {
     /// The execution block hash the update's `execution_branch` links to the header's body.
     pub execution_block_hash: B256,
 }
+pub mod anchor;

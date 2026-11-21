@@ -201,6 +201,7 @@ async fn replay_on_parent(
         state,
         codes,
         keys,
+        lc: None,
     };
     let bytes = alloy_rlp::encode(&input);
     std::fs::write(out, &bytes)?;
@@ -306,6 +307,7 @@ async fn build_at_latest(
         state: state.into_iter().collect(),
         codes: codes.into_iter().collect(),
         keys: keys.into_iter().collect(),
+        lc: None,
     };
     let bytes = alloy_rlp::encode(&input);
     std::fs::write(out, &bytes)?;

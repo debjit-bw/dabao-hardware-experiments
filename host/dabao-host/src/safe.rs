@@ -20,7 +20,7 @@ use std::{path::PathBuf, time::Duration};
 
 use alloy::{
     consensus::Header,
-    eips::{BlockId, BlockNumberOrTag, eip1559::BaseFeeParams, eip2930::AccessListItem},
+    eips::{BlockId, eip1559::BaseFeeParams, eip2930::AccessListItem},
     network::{EthereumWallet, TransactionBuilder},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
@@ -199,9 +199,10 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     }
     let device = crate::send::address(tcp).context("ask the device for its address")?;
 
-    let n = p.get_block_number().await?;
+    // the parent block is the one the sync committee signed (light-client proof), not "latest"
+    let (proof, block) = crate::lc::parent(p, tcp).await?;
+    let n = block.header.number;
     let at = BlockId::number(n);
-    let block = p.get_block_by_number(BlockNumberOrTag::Number(n)).await?.context("block")?;
     let ph: Header = block.header.inner.clone();
     ensure!(ph.hash_slow() == block.header.hash, "RLP header does not hash to the block hash");
     let basefee = ph.next_block_base_fee(BaseFeeParams::ethereum()).context("pre-London header")?;
@@ -239,6 +240,8 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
         state,
         codes,
         keys,
+        // test switch DABAO_NO_LC: send without the light-client proof (the device must refuse)
+        lc: if std::env::var_os("DABAO_NO_LC").is_some() { None } else { Some(proof) },
     };
     let bytes = alloy_rlp::encode(&input);
     println!("witness: {n_acc} accounts, {n_slots} slots, {} nodes, {} B", input.state.len(), bytes.len());

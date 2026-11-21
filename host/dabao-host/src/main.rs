@@ -160,6 +160,9 @@ async fn main() -> Result<()> {
         ["status"] => send::status(tcp),
         ["policy"] => send::policy(tcp),
         ["lc-fixture", out] => lc::fixture(out).await,
+        ["lc-anchor"] => lc::anchor().await,
+        ["lc-fixtures", dir] => lc::fixtures(dir).await,
+        ["lc-sync"] => lc::sync(tcp).await.map(|_| ()),
         ["compile-policy", out, input] => policy::compile(out, input),
         ["compile-descriptors", out, rest @ ..] if !rest.is_empty() => {
             descriptors::compile(out, &rest.iter().map(|s| s.to_string()).collect::<Vec<_>>())
@@ -280,6 +283,7 @@ async fn build(out: &str) -> Result<()> {
         state: state.into_iter().collect(),
         codes: codes.into_iter().collect(),
         keys: keys.into_iter().collect(),
+        lc: None,
     };
     let bytes = alloy_rlp::encode(&input);
     std::fs::write(&out, &bytes)?;

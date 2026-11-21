@@ -193,6 +193,7 @@ pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Opti
         effects: Vec::new(),
         clear_sign: Default::default(),
         policy: Default::default(),
+        header_check: Default::default(),
     };
     r.effects = crate::effects::effects(&input.tx, &input.block, &r);
     Ok((r, reads))

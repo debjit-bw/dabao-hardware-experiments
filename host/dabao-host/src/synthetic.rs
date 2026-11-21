@@ -61,6 +61,7 @@ pub fn build(from: Address, out: &str, data: Bytes, tip: Option<u128>) -> Result
         state,
         codes: vec![],
         keys: vec![Bytes::copy_from_slice(from.as_slice())],
+        lc: None,
     };
     let bytes = alloy_rlp::encode(&input);
     std::fs::write(out, &bytes)?;
