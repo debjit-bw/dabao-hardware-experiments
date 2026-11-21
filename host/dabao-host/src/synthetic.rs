@@ -12,7 +12,7 @@ use sim_types::{SimBlock, SimInput, SimTx};
 const RECIPIENT: Address = address!("0x000000000000000000000000000000000000bEEF");
 const BENEFICIARY: Address = address!("0x4838B106FCe9647Bdf1E7877BF73cE8B0BAD5f97");
 
-pub fn build(from: Address, out: &str) -> Result<()> {
+pub fn build(from: Address, out: &str, data: Bytes) -> Result<()> {
     let funded = TrieAccount {
         nonce: 0,
         balance: U256::from(10u128.pow(18)),
@@ -51,10 +51,10 @@ pub fn build(from: Address, out: &str) -> Result<()> {
             from,
             to: RECIPIENT,
             nonce: 0,
-            gas_limit: 21_000,
+            gas_limit: if data.is_empty() { 21_000 } else { 100_000 },
             gas_price: basefee as u128,
             value: U256::from(10u128.pow(16)), // 0.01 ETH
-            data: Bytes::new(),
+            data: data.clone(),
         },
         state,
         codes: vec![],
@@ -63,8 +63,9 @@ pub fn build(from: Address, out: &str) -> Result<()> {
     let bytes = alloy_rlp::encode(&input);
     std::fs::write(out, &bytes)?;
     println!(
-        "SYNTHETIC state (not mainnet): {from} holds 1 ETH, state root {state_root}; tx: 0.01 ETH to {RECIPIENT}, \
-         {} trie nodes -> {out} ({} B)",
+        "SYNTHETIC state (not mainnet): {from} holds 1 ETH, state root {state_root}; tx: 0.01 ETH to {RECIPIENT} \
+         with {} B calldata, {} trie nodes -> {out} ({} B)",
+        data.len(),
         input.state.len(),
         bytes.len()
     );

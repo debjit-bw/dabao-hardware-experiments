@@ -65,7 +65,27 @@ pub fn address(tcp: Option<&str>) -> Result<Address> {
     Ok(Address::from_slice(&a))
 }
 
+/// Send `input` without the local size check (tests the device-side refusal).
+pub fn send_unchecked(input: &[u8], tcp: Option<&str>) -> Result<()> {
+    match exchange(wire::TYPE_SIMULATE, input, wire::TYPE_SIMULATE, tcp) {
+        Ok(_) => println!("device accepted {} B", input.len()),
+        Err(e) => println!("device refused {} B: {e:#}", input.len()),
+    }
+    Ok(())
+}
+
+/// Refuse locally (before a multi-second upload) if `input` exceeds the device's limit.
+fn precheck(input: &[u8], tcp: Option<&str>) -> Result<()> {
+    let (st, _) = exchange(wire::TYPE_STATUS, &[], wire::TYPE_STATUS, tcp)?;
+    let st: sim_types::DeviceStatus = alloy_rlp::Decodable::decode(&mut &st[..]).context("decode DeviceStatus")?;
+    if input.len() as u64 > st.max_input {
+        bail!("input of {} B exceeds the device's limit of {} B (not sent)", input.len(), st.max_input);
+    }
+    Ok(())
+}
+
 pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
+    precheck(input, tcp)?;
     let (msg, rtt) = exchange(wire::TYPE_SIMULATE, input, wire::TYPE_SIMULATE, tcp)?;
     let r: SimResult = alloy_rlp::Decodable::decode(&mut &msg[..]).context("decode SimResult")?;
     println!("sent {} B, round trip {rtt:?} (verifier: {} us, peak heap {} B)", input.len(), r.micros, r.peak_heap);
@@ -76,6 +96,7 @@ pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
 /// Ask the device to simulate and sign; independently check what comes back.
 pub fn sign(input: &[u8], tcp: Option<&str>) -> Result<()> {
     let req: SimInput = alloy_rlp::Decodable::decode(&mut &input[..]).context("decode SimInput")?;
+    precheck(input, tcp)?;
     let (msg, rtt) = exchange(wire::TYPE_SIGN, input, wire::TYPE_SIGN, tcp)?;
     let r: SignResult = alloy_rlp::Decodable::decode(&mut &msg[..]).context("decode SignResult")?;
     println!(
@@ -163,6 +184,25 @@ fn print_sim(r: &SimResult) {
     for e in &r.effects {
         println!("  {}", describe(e));
     }
+    let cs = &r.clear_sign;
+    let s = |b: &[u8]| String::from_utf8_lossy(b).to_string();
+    if cs.descriptor.is_empty() {
+        println!("ERC-7730: no descriptor matched");
+    } else {
+        println!("ERC-7730: '{}', intent '{}'", s(&cs.descriptor), s(&cs.intent));
+    }
+    for f in &cs.fields {
+        println!("  shown  {:<32} {}", s(&f.label), s(&f.value));
+    }
+    if cs.violations.is_empty() {
+        if !cs.descriptor.is_empty() {
+            println!("  verdict: every effect is explained by what is shown");
+        }
+    } else {
+        for v in &cs.violations {
+            println!("  VIOLATION {}", s(v));
+        }
+    }
     if std::env::var_os("DABAO_VERBOSE").is_none() {
         return; // raw logs and state changes only with DABAO_VERBOSE=1
     }
@@ -214,22 +254,14 @@ fn hid_roundtrip(frame: &[u8]) -> Result<Vec<u8>> {
     if dropped > 0 {
         eprintln!("dropped {dropped} stale HID reports");
     }
-    let mut buf = Vec::new();
-    for (i, c) in frame.chunks(64).enumerate() {
+    // always send the whole frame: the device consumes a refused frame to the end before
+    // answering, so the report stream never loses sync
+    for c in frame.chunks(64) {
         let mut r = [0u8; 65]; // report ID 0 + 64 bytes
         r[1..1 + c.len()].copy_from_slice(c);
         dev.write(&r)?;
-        if i == 0 && frame.len() > 64 {
-            // the device may refuse a frame from its length prefix alone (too large): if a reply
-            // is already here, stop uploading, so the rest isn't read as new frames
-            let mut early = [0u8; 64];
-            let n = dev.read_timeout(&mut early, 100)?;
-            if n > 0 {
-                buf.extend_from_slice(&early[..n]);
-                break;
-            }
-        }
     }
+    let mut buf = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let mut r = [0u8; 64];

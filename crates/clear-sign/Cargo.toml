@@ -1,0 +1,16 @@
+[package]
+name = "clear-sign"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "ERC-7730 descriptors compiled for the device, and the effects-vs-display check"
+
+[dependencies]
+sim-types = { path = "../sim-types" }
+alloy-primitives = { version = "1.6.1", default-features = false, features = ["rlp"] }
+alloy-rlp = { version = "0.3.16", default-features = false, features = ["derive"] }
+alloy-dyn-abi = { version = "1.6.1", default-features = false }
+
+[dev-dependencies]
+xous-evm = { path = "../xous-evm" }
+alloy-dyn-abi = { version = "1.6.1" }

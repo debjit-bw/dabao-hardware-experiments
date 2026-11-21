@@ -68,6 +68,26 @@ pub struct SimResult {
     pub peak_heap: u64,
     /// Normalised effects (see [`effect`]), computed on the device from `logs` and `changes`.
     pub effects: Vec<Effect>,
+    /// The ERC-7730 clear-signing check (filled in by the verifier).
+    pub clear_sign: ClearSign,
+}
+
+/// Result of the ERC-7730 check: what the user is shown, and every effect it doesn't explain.
+/// Signing requires `descriptor` non-empty and `violations` empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct ClearSign {
+    /// Id of the matched descriptor (empty: none matched).
+    pub descriptor: Bytes,
+    pub intent: Bytes,
+    pub fields: Vec<ShownField>,
+    /// Human-readable reasons not to sign (empty: every effect is explained).
+    pub violations: Vec<Bytes>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct ShownField {
+    pub label: Bytes,
+    pub value: Bytes,
 }
 
 /// One normalised effect of a simulated transaction. `kind` is one of the [`effect`]

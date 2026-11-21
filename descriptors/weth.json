@@ -1,0 +1,51 @@
+{
+  "$schema": "https://github.com/ethereum/clear-signing-erc7730-registry/blob/master/specs/erc7730-v1.schema.json",
+  "context": {
+    "$id": "WETH9 (dabao-hackathon)",
+    "contract": {
+      "deployments": [{ "chainId": 1, "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" }]
+    }
+  },
+  "metadata": {
+    "owner": "Written for dabao-hackathon in ERC-7730 format (not from the registry)",
+    "contractName": "Wrapped Ether",
+    "token": { "name": "Wrapped Ether", "ticker": "WETH", "decimals": 18 }
+  },
+  "display": {
+    "formats": {
+      "deposit()": {
+        "intent": "Wrap ETH",
+        "fields": [{ "path": "@.value", "label": "Amount", "format": "amount" }]
+      },
+      "withdraw(uint256 wad)": {
+        "intent": "Unwrap WETH",
+        "fields": [
+          { "path": "wad", "label": "Amount", "format": "tokenAmount", "params": { "token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" } }
+        ]
+      },
+      "transfer(address dst, uint256 wad)": {
+        "intent": "Send",
+        "fields": [
+          { "path": "wad", "label": "Amount", "format": "tokenAmount", "params": { "token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" } },
+          { "path": "dst", "label": "To", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] } }
+        ]
+      },
+      "approve(address guy, uint256 wad)": {
+        "intent": "Approve",
+        "fields": [
+          { "path": "guy", "label": "Spender", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] } },
+          {
+            "path": "wad",
+            "label": "Amount",
+            "format": "tokenAmount",
+            "params": {
+              "token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Unlimited"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

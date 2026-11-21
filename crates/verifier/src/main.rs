@@ -63,20 +63,34 @@ fn run(input: &[u8]) -> SimResult {
     PEAK.store(base, Relaxed);
     let start = Instant::now();
     let mut r = xous_evm::sim::simulate(input).unwrap_or_else(error_result);
+    if r.error.is_empty() {
+        // ERC-7730: what the user would be shown vs what the simulation did
+        if let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
+            r.clear_sign = clear_sign::check(&DESCRIPTORS, inp.chain_id, &inp.tx, r.success, &r.effects);
+        }
+    }
     r.micros = start.elapsed().as_micros() as u64;
     r.peak_heap = (PEAK.load(Relaxed) - base) as u64;
     r
 }
 
-/// The signing policy. PLACEHOLDER until the effects inspector / ERC-7730 / policy engine:
-/// sign only if the simulation succeeded, the tx doesn't revert, and it is sent from this
-/// device's address on mainnet (the only chain the simulator's spec covers).
+/// ERC-7730 descriptors compiled into the firmware (crates/clear-sign/descriptors.bin).
+static DESCRIPTORS: std::sync::LazyLock<clear_sign::model::DescriptorSet> = std::sync::LazyLock::new(clear_sign::builtin);
+
+/// The signing policy: sign only if the simulation succeeded, the ERC-7730 check matched a
+/// descriptor and found every effect explained by what the user is shown, and the tx is sent
+/// from this device's address on mainnet (the only chain the simulator's spec covers).
 fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), String> {
     if !sim.error.is_empty() {
         return Err(format!("simulation rejected the input: {}", String::from_utf8_lossy(&sim.error)));
     }
     if !sim.success {
         return Err("the transaction reverts".into());
+    }
+    let cs = &sim.clear_sign;
+    if cs.descriptor.is_empty() || !cs.violations.is_empty() {
+        let why: Vec<String> = cs.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
+        return Err(format!("ERC-7730 check failed: {}", if why.is_empty() { "no descriptor matched".into() } else { why.join("; ") }));
     }
     if input.tx.from != signer {
         return Err(format!("tx is from {}, not this device ({signer})", input.tx.from));

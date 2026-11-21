@@ -4,6 +4,7 @@ members = [
     "crates/engine-spike",
     "crates/sim-types",
     "crates/xous-evm",
+    "crates/clear-sign",
     "crates/verifier",
     "crates/transport",
     "crates/signer",

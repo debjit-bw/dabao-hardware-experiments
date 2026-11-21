@@ -9,8 +9,9 @@
 //!                                           (TCP, e.g. 127.0.0.1:7610); print the SimResult
 //!   dabao-host sign <in.rlp> [--tcp ADDR]   simulate + policy + sign; checks the signature
 //!   dabao-host address [--tcp ADDR]         the device's signing address
-//!   dabao-host status [--tcp ADDR]          free RAM at boot, heap cap, max input size
-//!   dabao-host build-synthetic <from> <out.rlp>   SYNTHETIC state where <from> holds 1 ETH
+//!   dabao-host status [--tcp ADDR]          heap cap, max input size
+//!   dabao-host compile-descriptors <out.bin> <descriptor.json>...   ERC-7730 -> device blob
+//!   dabao-host build-synthetic <from> <out.rlp> [--data 0x..]   SYNTHETIC state where <from> holds 1 ETH
 //!                                           (tests the sign path; not mainnet state)
 //!
 //! `build`: a WETH `transfer(0x…dEaD, 1)` from a WETH holder seen in the latest block,
@@ -54,6 +55,7 @@ fn balance_of_calldata(who: Address) -> Bytes {
     d.into()
 }
 
+mod descriptors;
 mod replay;
 mod send;
 mod synthetic;
@@ -75,10 +77,15 @@ async fn main() -> Result<()> {
         ["build", out] => build(out).await,
         ["build", out, "--find-swap"] => replay::build(&provider()?, None, out).await,
         ["build", out, "--replay", hash] => replay::build(&provider()?, Some(hash.parse()?), out).await,
-        ["build-synthetic", from, out] => synthetic::build(from.parse()?, out),
+        ["build-synthetic", from, out] => synthetic::build(from.parse()?, out, Bytes::new()),
+        ["build-synthetic", from, out, "--data", hex] => synthetic::build(from.parse()?, out, hex.parse()?),
         ["send", path] => send::send(&std::fs::read(path)?, tcp),
+        ["send", path, "--no-precheck"] => send::send_unchecked(&std::fs::read(path)?, tcp),
         ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
         ["status"] => send::status(tcp),
+        ["compile-descriptors", out, rest @ ..] if !rest.is_empty() => {
+            descriptors::compile(out, &rest.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        }
         ["address"] => {
             println!("{}", send::address(tcp)?);
             Ok(())

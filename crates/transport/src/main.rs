@@ -183,12 +183,14 @@ fn serve(verifier: &Verifier, max_frame: usize) -> ! {
 }
 
 /// A frame being received: the lend buffer it is reassembled into (page-rounded, with room for
-/// the reply), the `type || message` length, and how many of those bytes have arrived.
+/// the reply; `None` for a refused frame, whose bytes are consumed and dropped so the stream
+/// stays in sync), the `type || message` length, how many bytes have arrived, and the refusal.
 #[cfg(target_os = "xous")]
 struct Incoming {
-    buf: xous::MemoryRange,
+    buf: Option<xous::MemoryRange>,
     need: usize,
     have: usize,
+    refusal: Option<String>,
 }
 
 #[cfg(target_os = "xous")]
@@ -208,36 +210,38 @@ fn serve(verifier: &Verifier, max_frame: usize) -> ! {
         if cur.is_none() {
             // first report of a frame: length prefix, then map the whole frame's buffer once
             let Some(need) = wire::frame_len([report[0], report[1], report[2], report[3]]) else {
+                // can't be delimited: nothing to skip, answer this report
                 send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, b"bad length"));
                 continue;
             };
-            if need > max_frame {
-                // refuse at once; the host stops sending when it reads this (dabao-host checks
-                // for an early reply), and any reports still in flight are rejected as bad lengths
-                let msg = format!("frame of {need} B exceeds this device's limit of {max_frame} B");
-                send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, msg.as_bytes()));
-                continue;
-            }
-            let cap = (need.max(16 * 1024) + 4095) & !4095;
-            match xous::map_memory(None, None, cap, xous::MemoryFlags::R | xous::MemoryFlags::W) {
-                Ok(buf) => cur = Some(Incoming { buf, need, have: 0 }),
-                Err(e) => {
-                    log::warn!("no memory for a {need} B frame: {e:?}");
-                    send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, b"device out of memory for this frame"));
-                    continue; // the rest of this frame's reports will be rejected as bad lengths
+            let refused = |msg: String| Incoming { buf: None, need, have: 0, refusal: Some(msg) };
+            cur = Some(if need > max_frame {
+                // too large: consume and drop the whole frame (no RAM), then refuse
+                refused(format!("frame of {need} B exceeds this device's limit of {max_frame} B"))
+            } else {
+                let cap = (need.max(16 * 1024) + 4095) & !4095;
+                match xous::map_memory(None, None, cap, xous::MemoryFlags::R | xous::MemoryFlags::W) {
+                    Ok(buf) => Incoming { buf: Some(buf), need, have: 0, refusal: None },
+                    Err(e) => refused(format!("device out of memory for a {need} B frame: {e:?}")),
                 }
-            }
+            });
             data = &report[4..];
         }
         let f = cur.as_mut().unwrap();
         let take = data.len().min(f.need - f.have); // padding after the frame is discarded
-        unsafe { f.buf.as_slice_mut::<u8>()[f.have..f.have + take].copy_from_slice(&data[..take]) };
+        if let Some(buf) = f.buf.as_mut() {
+            unsafe { buf.as_slice_mut::<u8>()[f.have..f.have + take].copy_from_slice(&data[..take]) };
+        }
         f.have += take;
         if f.have < f.need {
             continue;
         }
         let f = cur.take().unwrap();
-        let reply = handle_mapped(f.buf, f.need, verifier);
+        let reply = match (f.buf, f.refusal) {
+            (Some(buf), None) => handle_mapped(buf, f.need, verifier),
+            (_, Some(msg)) => wire::encode_frame(wire::TYPE_ERROR, msg.as_bytes()),
+            (None, None) => unreachable!(),
+        };
         send_reports(&usb, &reply);
     }
 }
