@@ -10,6 +10,7 @@ sim-types = { path = "../../crates/sim-types" }
 # the device's simulator, run on the host to check replays against the chain
 xous-evm = { path = "../../crates/xous-evm" }
 clear-sign = { path = "../../crates/clear-sign" }
+policy = { path = "../../crates/policy" }
 serde_json = "1"
 alloy = { version = "2.4.2", default-features = false, features = ["providers", "provider-http", "rpc-types", "consensus", "k256", "json-abi", "reqwest-rustls-tls"] }
 alloy-primitives = { version = "1.6.1" }

@@ -161,6 +161,7 @@ pub fn simulate_with(raw: &[u8], tamper: impl FnOnce(&mut SimInput)) -> Result<S
         peak_heap: 0,
         effects: Vec::new(),
         clear_sign: Default::default(),
+        policy: Default::default(),
     };
     r.effects = crate::effects::effects(&input.tx, &input.block, &r);
     Ok(r)

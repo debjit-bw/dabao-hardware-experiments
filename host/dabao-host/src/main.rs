@@ -15,6 +15,8 @@
 //!                                           build, simulate + check + sign on the device,
 //!                                           broadcast, compare the receipt with the prediction
 //!   dabao-host compile-descriptors <out.bin> <descriptor.json>...   ERC-7730 -> device blob
+//!   dabao-host compile-policy <out.bin> <policy.json>              signing policy -> device blob
+//!   dabao-host policy                                              the device's policy and counters
 //!   dabao-host build-synthetic <from> <out.rlp> [--data 0x.. | --eip1559]   SYNTHETIC state where <from> holds 1 ETH
 //!                                           (tests the sign path; not mainnet state)
 //!
@@ -60,6 +62,7 @@ fn balance_of_calldata(who: Address) -> Bytes {
 }
 
 mod descriptors;
+mod policy;
 mod replay;
 mod send;
 mod synthetic;
@@ -113,7 +116,7 @@ async fn main() -> Result<()> {
         }
         return tx::run(&provider()?, a, tcp).await;
     }
-    let usage = "usage: dabao-host build <out.rlp> [--replay TXHASH | --find-swap] | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address | status  [--tcp ADDR]";
+    let usage = "usage: dabao-host build <out.rlp> [--replay TXHASH | --find-swap] | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address | status | policy | compile-policy <out.bin> <policy.json>  [--tcp ADDR]";
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["build", out] => build(out).await,
         ["build", out, "--find-swap"] => replay::build(&provider()?, None, out).await,
@@ -125,6 +128,8 @@ async fn main() -> Result<()> {
         ["send", path, "--no-precheck"] => send::send_unchecked(&std::fs::read(path)?, tcp),
         ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
         ["status"] => send::status(tcp),
+        ["policy"] => send::policy(tcp),
+        ["compile-policy", out, input] => policy::compile(out, input),
         ["compile-descriptors", out, rest @ ..] if !rest.is_empty() => {
             descriptors::compile(out, &rest.iter().map(|s| s.to_string()).collect::<Vec<_>>())
         }

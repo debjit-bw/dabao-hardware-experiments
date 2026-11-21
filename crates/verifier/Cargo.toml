@@ -17,5 +17,13 @@ log-server = { package = "xous-api-log", version = "0.1.70" }
 sim-types = { path = "../sim-types" }
 xous-evm = { path = "../xous-evm" }
 clear-sign = { path = "../clear-sign" }
+policy = { path = "../policy" }
 alloy-rlp = { version = "0.3.16", default-features = false }
 alloy-primitives = { version = "1.6.1", default-features = false }
+
+# device builds only: keystore app slots for the policy counters (as the signer)
+keystore-api = { path = "../../../dabao-workshop/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
+xous-ipc = { version = "0.10.11", optional = true }
+
+[features]
+board-dabao = ["keystore-api", "xous-ipc"]

@@ -57,6 +57,15 @@ pub fn status(tcp: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub fn policy(tcp: Option<&str>) -> Result<()> {
+    let (st, _) = exchange(wire::TYPE_POLICY, &[], wire::TYPE_POLICY, tcp)?;
+    let st: sim_types::PolicyStatus = alloy_rlp::Decodable::decode(&mut &st[..]).context("decode PolicyStatus")?;
+    for l in &st.lines {
+        println!("{}", String::from_utf8_lossy(l));
+    }
+    Ok(())
+}
+
 pub fn address(tcp: Option<&str>) -> Result<Address> {
     let (a, _) = exchange(wire::TYPE_ADDRESS, &[], wire::TYPE_ADDRESS, tcp)?;
     if a.len() != 20 {
@@ -224,6 +233,14 @@ fn print_sim(r: &SimResult, chain_id: u64) {
     }
     for w in &cs.warnings {
         println!("  WARNING {}", s(w));
+    }
+    let p = &r.policy;
+    println!("policy '{}':", s(&p.policy));
+    for n in &p.notes {
+        println!("  {}", s(n));
+    }
+    for v in &p.violations {
+        println!("  POLICY VIOLATION {}", s(v));
     }
     if std::env::var_os("DABAO_VERBOSE").is_none() {
         return; // raw logs and state changes only with DABAO_VERBOSE=1

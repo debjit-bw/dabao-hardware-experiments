@@ -1,0 +1,15 @@
+[package]
+name = "policy"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "The device's signing policy: daily spending limits (counters in RRAM), max fee, max slippage, address allowlist"
+
+[dependencies]
+sim-types = { path = "../sim-types" }
+clear-sign = { path = "../clear-sign" }
+alloy-rlp = { version = "0.3.16", default-features = false, features = ["derive"] }
+alloy-primitives = { version = "1.6.1", default-features = false, features = ["rlp"] }
+
+[dev-dependencies]
+xous-evm = { path = "../xous-evm" }

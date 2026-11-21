@@ -49,6 +49,12 @@ Signer side (`crates/signer/src/store.rs`): the very first keystore call is
 `Claim(160, 2)`. If it is refused, the signer **panics instead of using the key**: a refused
 claim means another process owns the slots and may have read or replaced the key.
 
+## Other claimants
+
+The verifier claims slots **176–207** for the policy's daily-spending counters
+(`crates/verifier/src/counters.rs`, docs/policy.md), at boot and before it registers its
+server. A refused claim disables signing (fail closed) rather than stopping the verifier.
+
 ## Ordering: why the signer always claims first
 
 "First claim wins" is only safe if the signer's claim happens before any attacker-controlled

@@ -108,6 +108,10 @@ fn handle(body: &[u8], verifier: &Verifier) -> Vec<u8> {
             Ok(st) => wire::encode_frame(wire::TYPE_STATUS, &st),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
         },
+        wire::TYPE_POLICY => match verifier.call(ipc::OP_POLICY, &[]) {
+            Ok(st) => wire::encode_frame(wire::TYPE_POLICY, &st),
+            Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
+        },
         wire::TYPE_ADDRESS => match verifier.call(ipc::OP_ADDRESS, &[]) {
             Ok(a) if a.len() == 20 => wire::encode_frame(wire::TYPE_ADDRESS, &a),
             Ok(_) => wire::encode_frame(wire::TYPE_ERROR, b"no signer attached"),

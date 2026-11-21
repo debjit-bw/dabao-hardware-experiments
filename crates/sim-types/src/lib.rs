@@ -85,6 +85,25 @@ pub struct SimResult {
     pub effects: Vec<Effect>,
     /// The ERC-7730 clear-signing check (filled in by the verifier).
     pub clear_sign: ClearSign,
+    /// The device's signing policy (filled in by the verifier).
+    pub policy: PolicyCheck,
+}
+
+/// Result of the signing policy (`crates/policy`). Signing requires `violations` empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct PolicyCheck {
+    /// Id of the policy compiled into the firmware.
+    pub policy: Bytes,
+    pub violations: Vec<Bytes>,
+    /// What the policy checked and what it would record (e.g. today's spending).
+    pub notes: Vec<Bytes>,
+}
+
+/// Reply to `wire::TYPE_POLICY`: the policy in force and its counters, as text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct PolicyStatus {
+    pub policy: Bytes,
+    pub lines: Vec<Bytes>,
 }
 
 /// Result of the ERC-7730 check: what the user is shown, and every effect it doesn't explain.
@@ -99,6 +118,21 @@ pub struct ClearSign {
     pub violations: Vec<Bytes>,
     /// Things the user should know that don't block signing (e.g. no slippage protection).
     pub warnings: Vec<Bytes>,
+    /// Every address the user is shown (recipients, spenders, beneficiaries), for the policy.
+    pub addresses: Vec<Address>,
+    /// Shown amounts of assets the sender gains that are below what the simulation gains
+    /// (swap minimums), for the policy's slippage limit.
+    pub min_receive: Vec<MinReceive>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct MinReceive {
+    /// The asset (zero = ETH).
+    pub asset: Address,
+    /// The shown minimum.
+    pub shown: U256,
+    /// What the simulation actually gains.
+    pub simulated: U256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
@@ -244,6 +278,8 @@ pub mod wire {
     pub const TYPE_ADDRESS: u8 = 0x13;
     /// message: empty; reply: RLP `DeviceStatus`.
     pub const TYPE_STATUS: u8 = 0x14;
+    /// message: empty; reply: RLP `PolicyStatus`.
+    pub const TYPE_POLICY: u8 = 0x15;
     /// reply only: UTF-8 error from the transport (bad frame, unknown type, verifier down).
     pub const TYPE_ERROR: u8 = 0x7f;
 
@@ -283,6 +319,8 @@ pub mod ipc {
     pub const OP_ADDRESS: usize = 3;
     /// -> RLP `DeviceStatus`.
     pub const OP_STATUS: usize = 4;
+    /// -> RLP `PolicyStatus`.
+    pub const OP_POLICY: usize = 5;
     pub const OP_SIGNER_WAIT: usize = 10;
     pub const OP_SIGNER_RESULT: usize = 11;
 }

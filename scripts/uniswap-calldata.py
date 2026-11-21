@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Calldata for a tiny Uniswap V3 swap paid in ETH via SwapRouter02 (Sepolia by default).
 
-Usage: scripts/uniswap-calldata.py <from> [amount_wei] [token_out] [fee] [--multicall]
+Usage: scripts/uniswap-calldata.py <from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]
 
 Quotes the swap by eth_call-ing exactInputSingle from <from> with value=amount and
-amountOutMinimum=0, then sets amountOutMinimum to 90% of the quote (real slippage protection,
-not 0). Prints the calldata: exactInputSingle(...) or multicall(deadline, [exactInputSingle(...)]).
+amountOutMinimum=0, then sets amountOutMinimum to the quote minus N basis points (default 100 = 1%;
+the device's policy refuses more than 300). Prints the calldata: exactInputSingle(...) or multicall(deadline, [exactInputSingle(...)]).
 RPC_URL defaults to publicnode Sepolia. Stdlib only.
 """
 import json, os, sys, time, urllib.request
@@ -49,8 +49,14 @@ def eth_call(frm, to, data, value):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--multicall"]
-    use_mc = "--multicall" in sys.argv
+    argv = sys.argv[1:]
+    bps = 100
+    if "--slippage-bps" in argv:
+        i = argv.index("--slippage-bps")
+        bps = int(argv[i + 1])
+        del argv[i:i + 2]
+    args = [a for a in argv if a != "--multicall"]
+    use_mc = "--multicall" in argv
     if not args:
         sys.exit(__doc__)
     frm = args[0]
@@ -58,7 +64,7 @@ def main():
     token_out = args[2] if len(args) > 2 else USDC
     fee = int(args[3]) if len(args) > 3 else 500
     quote = int(eth_call(frm, ROUTER, exact_input_single(WETH, token_out, fee, frm, amount, 0), amount), 16)
-    min_out = quote * 9 // 10
+    min_out = quote * (10_000 - bps) // 10_000
     call = exact_input_single(WETH, token_out, fee, frm, amount, min_out)
     data = multicall(int(time.time()) + 1800, [call]) if use_mc else call
     print(f"# quote: {amount} wei -> {quote} units of {token_out} (fee {fee}); amountOutMinimum {min_out}", file=sys.stderr)

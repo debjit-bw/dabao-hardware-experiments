@@ -18,7 +18,10 @@ use std::sync::{
     mpsc::{Receiver, Sender, channel},
 };
 
+mod counters;
+
 use alloy_primitives::Address;
+use counters::Counters;
 use sim_types::{SignJob, SignResult, SimInput, SimResult, ipc};
 
 /// Counts live and peak heap bytes (Xous has no allocator statistics).
@@ -47,38 +50,51 @@ fn error_result(e: impl Into<String>) -> SimResult {
     SimResult { error: e.into().into_bytes().into(), ..Default::default() }
 }
 
-/// Simulate `input`, with this request's time and peak heap filled in. Inputs whose estimated
-/// peak memory doesn't fit are rejected up front: running out of memory aborts the verifier,
-/// which would leave the device stuck until RESET.
-fn run(input: &[u8]) -> SimResult {
+/// Simulate `input`, with this request's time and peak heap filled in, then run the ERC-7730
+/// check and the policy. Returns the result and the policy counters to persist if it is signed.
+/// Inputs whose estimated peak memory doesn't fit are rejected up front: running out of memory
+/// aborts the verifier, which would leave the device stuck until RESET.
+fn run(input: &[u8], counters: &Counters) -> (SimResult, Vec<(usize, policy::Counter)>) {
     let max = MAX_INPUT;
     if input.len() > max {
-        return error_result(format!(
+        let e = error_result(format!(
             "input too large for this device: {} B > {max} B (estimated peak {} KB)",
             input.len(),
             estimated_peak(input.len()) / 1024
         ));
+        return (e, vec![]);
     }
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
     let start = Instant::now();
     let mut r = xous_evm::sim::simulate(input).unwrap_or_else(error_result);
+    let mut updates = Vec::new();
     if r.error.is_empty() {
-        // ERC-7730: what the user would be shown vs what the simulation did
         if let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
+            // ERC-7730: what the user would be shown vs what the simulation did
             r.clear_sign = clear_sign::check(&DESCRIPTORS, inp.chain_id, &inp.tx, r.success, &r.effects);
+            // the device's own policy: limits, fee, slippage, allowlist
+            let out = policy::evaluate(&POLICY, &counters.values, &DESCRIPTORS, &inp, &r);
+            r.policy = out.check;
+            if !counters.ok() {
+                r.policy.violations.push(b"policy counters unreadable: can't enforce spending limits".to_vec().into());
+            }
+            updates = out.updates;
         }
     }
     r.micros = start.elapsed().as_micros() as u64;
     r.peak_heap = (PEAK.load(Relaxed) - base) as u64;
-    r
+    (r, updates)
 }
+
+/// The signing policy compiled into the firmware (crates/policy/policy.bin).
+static POLICY: std::sync::LazyLock<policy::Policy> = std::sync::LazyLock::new(policy::builtin);
 
 /// ERC-7730 descriptors compiled into the firmware (crates/clear-sign/descriptors.bin).
 static DESCRIPTORS: std::sync::LazyLock<clear_sign::model::DescriptorSet> = std::sync::LazyLock::new(clear_sign::builtin);
 
-/// The signing policy: sign only if the simulation succeeded, the ERC-7730 check matched a
-/// descriptor and found every effect explained by what the user is shown, and the tx is sent
+/// Sign only if the simulation succeeded, the ERC-7730 check matched a descriptor and found
+/// every effect explained by what the user is shown, the policy passed, and the tx is sent
 /// from this device's address on a chain the simulator has a spec for (mainnet, Sepolia).
 fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), String> {
     if !sim.error.is_empty() {
@@ -91,6 +107,10 @@ fn approve(input: &SimInput, sim: &SimResult, signer: Address) -> Result<(), Str
     if cs.descriptor.is_empty() || !cs.violations.is_empty() {
         let why: Vec<String> = cs.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
         return Err(format!("ERC-7730 check failed: {}", if why.is_empty() { "no descriptor matched".into() } else { why.join("; ") }));
+    }
+    if !sim.policy.violations.is_empty() {
+        let why: Vec<String> = sim.policy.violations.iter().map(|v| String::from_utf8_lossy(v).to_string()).collect();
+        return Err(format!("policy: {}", why.join("; ")));
     }
     if input.tx.from != signer {
         return Err(format!("tx is from {}, not this device ({signer})", input.tx.from));
@@ -191,8 +211,8 @@ impl SignerLink {
 }
 
 /// Simulate, check the policy, and (if approved) have the signer sign.
-fn sign_request(raw: &[u8], signer: &SignerLink) -> SignResult {
-    let sim = run(raw);
+fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters) -> SignResult {
+    let (sim, updates) = run(raw, counters);
     let mut out = SignResult { sim, ..Default::default() };
     let Some(me) = signer.address() else {
         out.refused = b"no signer attached".to_vec().into();
@@ -208,6 +228,12 @@ fn sign_request(raw: &[u8], signer: &SignerLink) -> SignResult {
     };
     if let Err(e) = approve(&input, &out.sim, me) {
         log::info!("verifier: refused to sign: {e}");
+        out.refused = e.into_bytes().into();
+        return out;
+    }
+    // record the spending before signing: a crash after this over-counts, never under-counts
+    if let Err(e) = counters.commit(&updates) {
+        log::error!("verifier: {e}");
         out.refused = e.into_bytes().into();
         return out;
     }
@@ -272,6 +298,8 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     raise_heap_limit();
+    // claim and load the policy counters before registering the server (before any host input)
+    let mut counters = Counters::open(&POLICY);
     let xns = xous_names::XousNames::new().unwrap();
     let signer = start_signer_channel(&xns);
     let sid = xns.register_name(ipc::VERIFIER_SERVER_NAME, Some(1)).expect("can't register verifier");
@@ -288,7 +316,7 @@ fn main() -> ! {
         match op {
             ipc::OP_SIMULATE => {
                 // safety: the kernel mapped the buffer for us; we only read the first `len` bytes
-                let result = run(unsafe { &mem.buf.as_slice::<u8>()[..len] });
+                let (result, _) = run(unsafe { &mem.buf.as_slice::<u8>()[..len] }, &counters);
                 log_result(&result);
                 reply(mem, alloy_rlp::encode(&result), |n, cap| {
                     alloy_rlp::encode(&error_result(format!("result ({n} B) larger than buffer ({cap} B)")))
@@ -296,7 +324,7 @@ fn main() -> ! {
             }
             ipc::OP_SIGN => {
                 let raw = unsafe { mem.buf.as_slice::<u8>()[..len].to_vec() };
-                let result = sign_request(&raw, &signer);
+                let result = sign_request(&raw, &signer, &mut counters);
                 log_result(&result.sim);
                 reply(mem, alloy_rlp::encode(&result), |n, cap| {
                     let r = SignResult {
@@ -312,6 +340,17 @@ fn main() -> ! {
                     heap_limit: HEAP_LIMIT as u64,
                     max_input: MAX_INPUT as u64,
                     signer: signer.address().map(|a| a.to_vec()).unwrap_or_default().into(),
+                };
+                reply(mem, alloy_rlp::encode(&st), |_, _| Vec::new());
+            }
+            ipc::OP_POLICY => {
+                let mut lines = policy::describe(&POLICY, &counters.values, &DESCRIPTORS);
+                if !counters.ok() {
+                    lines.push("COUNTERS UNREADABLE: signing disabled".into());
+                }
+                let st = sim_types::PolicyStatus {
+                    policy: POLICY.id.clone(),
+                    lines: lines.into_iter().map(|l| l.into_bytes().into()).collect(),
                 };
                 reply(mem, alloy_rlp::encode(&st), |_, _| Vec::new());
             }

@@ -36,7 +36,9 @@ SYSTEM_MAX=$(( 0x260000 ))   # APP_RRAM_START - KERNEL_START
 APPS_MAX=$(( 0xDA300 ))      # APP_RRAM_LEN
 
 SERVICE="${SERVICE:-verifier}"
-(cd "$here" && cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf)
+svc_features=()
+[ "$SERVICE" = verifier ] && svc_features=(--features board-dabao)   # keystore slots for policy counters
+(cd "$here" && cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf ${svc_features[@]+"${svc_features[@]}"})
 (cd "$here" && cargo build --release -p transport --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
 (cd "$here" && cargo build --release -p signer --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
 # the signer goes into the apps image next to the app (unless building something else)

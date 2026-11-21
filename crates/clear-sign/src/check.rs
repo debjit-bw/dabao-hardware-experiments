@@ -324,6 +324,7 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
         if shown_amount >= gain {
             continue; // exact output, or not a minimum
         }
+        out.min_receive.push(sim_types::MinReceive { asset, shown: shown_amount, simulated: gain });
         let label = String::from_utf8_lossy(&shown.fields[i].label).to_string();
         let pct = (gain - shown_amount) * U256::from(10_000) / gain; // basis points below the simulation
         let pct = format!("{}.{:02}%", pct / U256::from(100), pct % U256::from(100));
@@ -346,6 +347,7 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
     }
     shown.add(b"Max network fee", shown.amount(Address::ZERO, U256::from(tx.gas_limit) * U256::from(tx.gas_price)));
 
+    out.addresses = shown.addresses;
     out.fields = shown.fields;
     out.violations = violations.into_iter().map(|v| Bytes::from(v.into_bytes())).collect();
     out.warnings = warnings.into_iter().map(|v| Bytes::from(v.into_bytes())).collect();
