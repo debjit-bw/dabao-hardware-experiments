@@ -1,0 +1,26 @@
+[package]
+name = "engine-spike"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Spike: does paradigmxyz/stateless (reth stateless validation) build and run on Xous / Baochip-1x?"
+
+[[bin]]
+name = "engine-spike"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4.14"
+xous = "0.9.71"
+log-server = { package = "xous-api-log", version = "0.1.70" }
+
+# Engine: paradigmxyz/stateless (formerly reth-stateless, removed from reth in #22115).
+# reth crates pinned to the same rev stateless pins, so there is one copy of each.
+stateless = { git = "https://github.com/paradigmxyz/stateless", tag = "reth-guest-v0.1.0-rc.9" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "db702b511a9dfe5a80ef76685dd93652ffe37cc5", default-features = false }
+reth-primitives-traits = { version = "0.7.0", default-features = false }
+alloy-consensus = { version = "2.4.2", default-features = false }
+alloy-eips = { version = "2.4.2", default-features = false }
+alloy-genesis = { version = "2.4.2", default-features = false }
+alloy-primitives = { version = "1.6.1", default-features = false }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "db702b511a9dfe5a80ef76685dd93652ffe37cc5", default-features = false }
