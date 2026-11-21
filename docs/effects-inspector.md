@@ -112,6 +112,12 @@ Effects on the device are identical to the host's. Most of the round trip is HID
 3. **Emulator heap numbers run ~10–15% above the board's** (64-bit vs 32-bit): 466 / 665 /
    798 KB in the emulator vs 420 / 594 / 699 KB on the chip.
 
-Open: a verifier that dies mid-request leaves the transport blocked forever (the device needs a
-RESET); the verifier should reject inputs it can't fit instead. We don't yet know the free-RAM
-headroom precisely.
+Robustness (done, see PROGRESS.md):
+- The verifier refuses inputs over **140 KB** before decoding ("input too large for this
+  device"), just above the largest input measured to work (131 KB → 714 KB peak). Free RAM
+  can't be measured from a process: Xous's `map_memory` maps lazily (a 4 MiB probe succeeds on
+  the 2 MiB chip), and touching pages to find the limit would kill the prober.
+- The transport learns that limit from the verifier at boot and refuses oversized frames from
+  their length prefix; `dabao-host` stops uploading when it sees the early refusal.
+- Verifier calls have a 30 s timeout in the transport: a verifier that dies or stalls answers
+  "verifier unresponsive … press RESET" instead of hanging the host forever.

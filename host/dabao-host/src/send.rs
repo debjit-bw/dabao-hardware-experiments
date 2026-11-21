@@ -43,6 +43,20 @@ fn exchange(ty: u8, message: &[u8], want: u8, tcp: Option<&str>) -> Result<(Vec<
     Ok((msg.to_vec(), rtt))
 }
 
+pub fn status(tcp: Option<&str>) -> Result<()> {
+    let (st, rtt) = exchange(wire::TYPE_STATUS, &[], wire::TYPE_STATUS, tcp)?;
+    let st: sim_types::DeviceStatus = alloy_rlp::Decodable::decode(&mut &st[..]).context("decode DeviceStatus")?;
+    let kb = |b: u64| format!("{} KB", b / 1024);
+    println!(
+        "free RAM: {}; verifier heap cap: {}; max input: {}; signer: {}; (round trip {rtt:?})",
+        if st.free_ram_at_boot == 0 { "not measured".into() } else { kb(st.free_ram_at_boot) },
+        kb(st.heap_limit),
+        kb(st.max_input),
+        if st.signer.len() == 20 { Address::from_slice(&st.signer).to_string() } else { "not attached".into() }
+    );
+    Ok(())
+}
+
 pub fn address(tcp: Option<&str>) -> Result<Address> {
     let (a, _) = exchange(wire::TYPE_ADDRESS, &[], wire::TYPE_ADDRESS, tcp)?;
     if a.len() != 20 {
@@ -200,12 +214,22 @@ fn hid_roundtrip(frame: &[u8]) -> Result<Vec<u8>> {
     if dropped > 0 {
         eprintln!("dropped {dropped} stale HID reports");
     }
-    for c in frame.chunks(64) {
+    let mut buf = Vec::new();
+    for (i, c) in frame.chunks(64).enumerate() {
         let mut r = [0u8; 65]; // report ID 0 + 64 bytes
         r[1..1 + c.len()].copy_from_slice(c);
         dev.write(&r)?;
+        if i == 0 && frame.len() > 64 {
+            // the device may refuse a frame from its length prefix alone (too large): if a reply
+            // is already here, stop uploading, so the rest isn't read as new frames
+            let mut early = [0u8; 64];
+            let n = dev.read_timeout(&mut early, 100)?;
+            if n > 0 {
+                buf.extend_from_slice(&early[..n]);
+                break;
+            }
+        }
     }
-    let mut buf = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let mut r = [0u8; 64];

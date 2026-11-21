@@ -9,6 +9,7 @@
 //!                                           (TCP, e.g. 127.0.0.1:7610); print the SimResult
 //!   dabao-host sign <in.rlp> [--tcp ADDR]   simulate + policy + sign; checks the signature
 //!   dabao-host address [--tcp ADDR]         the device's signing address
+//!   dabao-host status [--tcp ADDR]          free RAM at boot, heap cap, max input size
 //!   dabao-host build-synthetic <from> <out.rlp>   SYNTHETIC state where <from> holds 1 ETH
 //!                                           (tests the sign path; not mainnet state)
 //!
@@ -69,7 +70,7 @@ async fn main() -> Result<()> {
         None => None,
     };
     let tcp = tcp.as_deref();
-    let usage = "usage: dabao-host build <out.rlp> [--replay TXHASH | --find-swap] | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address  [--tcp ADDR]";
+    let usage = "usage: dabao-host build <out.rlp> [--replay TXHASH | --find-swap] | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address | status  [--tcp ADDR]";
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["build", out] => build(out).await,
         ["build", out, "--find-swap"] => replay::build(&provider()?, None, out).await,
@@ -77,6 +78,7 @@ async fn main() -> Result<()> {
         ["build-synthetic", from, out] => synthetic::build(from.parse()?, out),
         ["send", path] => send::send(&std::fs::read(path)?, tcp),
         ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
+        ["status"] => send::status(tcp),
         ["address"] => {
             println!("{}", send::address(tcp)?);
             Ok(())

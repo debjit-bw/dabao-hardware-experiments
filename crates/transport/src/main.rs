@@ -10,13 +10,46 @@ use sim_types::{ipc, wire};
 
 const VERSION: &str = concat!("dabao-verifier transport ", env!("CARGO_PKG_VERSION"));
 
-/// Forwards a simulate request to the verifier over a lent buffer; returns RLP `SimResult`.
-struct Verifier(xous::CID);
+/// How long the transport waits for the verifier. A verifier that dies or stalls mid-request
+/// never returns the lent buffer; without a bound the HID loop (and the host) would wait forever.
+const VERIFIER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A lend to the verifier: opcode, the buffer (request in, reply out), request length.
+struct Job(usize, xous::MemoryRange, usize);
+
+/// The verifier, behind a worker thread so every call has a timeout. After a timeout the
+/// verifier is considered dead (its worker is still blocked holding the buffer) and every later
+/// call fails at once.
+struct Verifier {
+    jobs: std::sync::mpsc::Sender<Job>,
+    results: std::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
+    dead: std::cell::Cell<bool>,
+}
 
 impl Verifier {
     fn connect() -> Self {
         let xns = xous_names::XousNames::new().unwrap();
-        Verifier(xns.request_connection_blocking(ipc::VERIFIER_SERVER_NAME).expect("verifier"))
+        let cid = xns.request_connection_blocking(ipc::VERIFIER_SERVER_NAME).expect("verifier");
+        let (jobs, job_rx) = std::sync::mpsc::channel::<Job>();
+        let (res_tx, results) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for Job(op, buf, len) in job_rx {
+                let cap = buf.len();
+                let r = xous::send_message(cid, xous::Message::new_lend_mut(op, buf, None, xous::MemorySize::new(len)));
+                let out = match r {
+                    Ok(xous::Result::MemoryReturned(_, Some(valid))) => {
+                        Ok(unsafe { buf.as_slice::<u8>()[..valid.get().min(cap)].to_vec() })
+                    }
+                    Ok(xous::Result::MemoryReturned(_, None)) => Ok(Vec::new()),
+                    other => Err(format!("verifier IPC failed: {other:?}")),
+                };
+                xous::unmap_memory(buf).ok();
+                if res_tx.send(out).is_err() {
+                    break;
+                }
+            }
+        });
+        Verifier { jobs, results, dead: std::cell::Cell::new(false) }
     }
 
     fn simulate(&self, input: &[u8]) -> Result<Vec<u8>, String> {
@@ -24,17 +57,24 @@ impl Verifier {
     }
 
     /// Lend `buf` (holding `len` bytes of request, room for the reply) with `op`; returns the
-    /// reply bytes and unmaps `buf`. Used by the device path, which reassembles the frame
-    /// straight into the lend buffer (no heap copy: RAM is tight).
+    /// reply bytes. `buf` is consumed (unmapped by the worker, or leaked if the verifier hangs).
     fn call_mapped(&self, op: usize, buf: xous::MemoryRange, len: usize) -> Result<Vec<u8>, String> {
-        let cap = buf.len();
-        let r = xous::send_message(self.0, xous::Message::new_lend_mut(op, buf, None, xous::MemorySize::new(len)));
-        let out = match r {
-            Ok(xous::Result::MemoryReturned(_, Some(valid))) => Ok(unsafe { buf.as_slice::<u8>()[..valid.get().min(cap)].to_vec() }),
-            other => Err(format!("verifier IPC failed: {other:?}")),
-        };
-        xous::unmap_memory(buf).ok();
-        out
+        const DEAD: &str = "verifier unresponsive (it may have run out of memory); press RESET on the device";
+        if self.dead.get() {
+            xous::unmap_memory(buf).ok();
+            return Err(DEAD.into());
+        }
+        if self.jobs.send(Job(op, buf, len)).is_err() {
+            return Err(DEAD.into());
+        }
+        match self.results.recv_timeout(VERIFIER_TIMEOUT) {
+            Ok(r) => r,
+            Err(_) => {
+                log::error!("verifier did not answer within {VERIFIER_TIMEOUT:?}; refusing further requests");
+                self.dead.set(true);
+                Err(DEAD.into())
+            }
+        }
     }
 
     /// Lend `input` (plus room for the reply) with `op`; returns the verifier's reply bytes.
@@ -45,19 +85,7 @@ impl Verifier {
             .map_err(|e| format!("out of memory for a {cap} B buffer: {e:?}"))?;
         // safety: freshly mapped, `cap` bytes
         unsafe { range.as_slice_mut::<u8>()[..input.len()].copy_from_slice(input) };
-        let r = xous::send_message(
-            self.0,
-            xous::Message::new_lend_mut(op, range, None, xous::MemorySize::new(input.len())),
-        );
-        let out = match r {
-            Ok(xous::Result::MemoryReturned(_, Some(valid))) => {
-                // safety: the verifier wrote `valid` bytes of reply into our buffer
-                Ok(unsafe { range.as_slice::<u8>()[..valid.get().min(cap)].to_vec() })
-            }
-            other => Err(format!("verifier IPC failed: {other:?}")),
-        };
-        xous::unmap_memory(range).ok();
-        out
+        self.call_mapped(op, range, input.len())
     }
 }
 
@@ -74,6 +102,10 @@ fn handle(body: &[u8], verifier: &Verifier) -> Vec<u8> {
         },
         wire::TYPE_SIGN => match verifier.call(ipc::OP_SIGN, message) {
             Ok(result) => wire::encode_frame(wire::TYPE_SIGN, &result),
+            Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
+        },
+        wire::TYPE_STATUS => match verifier.call(ipc::OP_STATUS, &[]) {
+            Ok(st) => wire::encode_frame(wire::TYPE_STATUS, &st),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
         },
         wire::TYPE_ADDRESS => match verifier.call(ipc::OP_ADDRESS, &[]) {
@@ -102,11 +134,20 @@ fn main() -> ! {
             _ => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
-    serve(&verifier)
+    // the verifier's input limit: oversized frames are refused at the length prefix, before
+    // the host spends seconds uploading them (and before the transport maps RAM for them)
+    let max_frame = verifier
+        .call(ipc::OP_STATUS, &[])
+        .ok()
+        .and_then(|st| <sim_types::DeviceStatus as alloy_rlp::Decodable>::decode(&mut &st[..]).ok())
+        .map(|st| st.max_input as usize + 1) // + the type byte
+        .unwrap_or(wire::MAX_LEN);
+    log::info!("max frame {max_frame} B");
+    serve(&verifier, max_frame)
 }
 
 #[cfg(not(target_os = "xous"))]
-fn serve(verifier: &Verifier) -> ! {
+fn serve(verifier: &Verifier, max_frame: usize) -> ! {
     use std::io::{Read, Write};
     let port: u16 = std::env::var("DABAO_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7610);
     let listener = std::net::TcpListener::bind(("127.0.0.1", port)).expect("can't bind the emulator socket");
@@ -124,6 +165,11 @@ fn serve(verifier: &Verifier) -> ! {
                 stream.write_all(&wire::encode_frame(wire::TYPE_ERROR, b"bad length")).ok();
                 break;
             };
+            if n > max_frame {
+                let msg = format!("frame of {n} B exceeds this device's limit of {max_frame} B");
+                stream.write_all(&wire::encode_frame(wire::TYPE_ERROR, msg.as_bytes())).ok();
+                break; // the host is still sending the body: drop the connection
+            }
             let mut body = vec![0u8; n];
             if stream.read_exact(&mut body).is_err() {
                 break;
@@ -146,7 +192,7 @@ struct Incoming {
 }
 
 #[cfg(target_os = "xous")]
-fn serve(verifier: &Verifier) -> ! {
+fn serve(verifier: &Verifier, max_frame: usize) -> ! {
     let usb = usb_bao1x::UsbHid::new();
     let mut cur: Option<Incoming> = None;
     loop {
@@ -165,6 +211,13 @@ fn serve(verifier: &Verifier) -> ! {
                 send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, b"bad length"));
                 continue;
             };
+            if need > max_frame {
+                // refuse at once; the host stops sending when it reads this (dabao-host checks
+                // for an early reply), and any reports still in flight are rejected as bad lengths
+                let msg = format!("frame of {need} B exceeds this device's limit of {max_frame} B");
+                send_reports(&usb, &wire::encode_frame(wire::TYPE_ERROR, msg.as_bytes()));
+                continue;
+            }
             let cap = (need.max(16 * 1024) + 4095) & !4095;
             match xous::map_memory(None, None, cap, xous::MemoryFlags::R | xous::MemoryFlags::W) {
                 Ok(buf) => cur = Some(Incoming { buf, need, have: 0 }),

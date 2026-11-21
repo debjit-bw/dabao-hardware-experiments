@@ -47,8 +47,18 @@ fn error_result(e: impl Into<String>) -> SimResult {
     SimResult { error: e.into().into_bytes().into(), ..Default::default() }
 }
 
-/// Simulate `input`, with this request's time and peak heap filled in.
+/// Simulate `input`, with this request's time and peak heap filled in. Inputs whose estimated
+/// peak memory doesn't fit are rejected up front: running out of memory aborts the verifier,
+/// which would leave the device stuck until RESET.
 fn run(input: &[u8]) -> SimResult {
+    let max = MAX_INPUT;
+    if input.len() > max {
+        return error_result(format!(
+            "input too large for this device: {} B > {max} B (estimated peak {} KB)",
+            input.len(),
+            estimated_peak(input.len()) / 1024
+        ));
+    }
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
     let start = Instant::now();
@@ -211,6 +221,24 @@ fn reply(mem: &mut xous::MemoryMessage, out: Vec<u8>, too_big: impl FnOnce(usize
 /// 2 MiB shared by everything, so this is not unlimited.
 const HEAP_LIMIT: usize = 1536 * 1024;
 
+/// Memory model for one simulation, fitted to board measurements (peak heap: WETH transfer
+/// 23 KB -> 420 KB, swap 94 KB -> 594 KB, swap 131 KB -> 699-714 KB, i.e. ~330 KB + 2.8 x
+/// input) and padded: estimate = BASE + FACTOR x input. Used only to report the estimate.
+const MODEL_BASE: usize = 350 * 1024;
+const MODEL_FACTOR_X10: usize = 35; // 3.5 x
+
+/// Largest `SimInput` accepted: just above the largest input measured to work on the board
+/// (131 KB swap, 714 KB peak heap). Physical RAM (2 MiB SRAM, shared) is the real limit, and it
+/// can't be measured from here: `map_memory` maps lazily (a 4 MiB probe succeeds on a 2 MiB
+/// chip) and touching pages to find the limit would kill this process when RAM runs out.
+/// Running out of memory mid-request aborts the verifier and wedges the device until RESET, so
+/// we refuse instead. Raise only after measuring a larger input on the board.
+const MAX_INPUT: usize = 140 * 1024;
+
+fn estimated_peak(input_len: usize) -> usize {
+    MODEL_BASE + input_len * MODEL_FACTOR_X10 / 10
+}
+
 fn raise_heap_limit() {
     use xous::{Limits, SysCall, rsyscall};
     let cur = match rsyscall(SysCall::AdjustProcessLimit(Limits::HeapMaximum as usize, 0, HEAP_LIMIT)) {
@@ -263,6 +291,15 @@ fn main() -> ! {
                     };
                     alloy_rlp::encode(&r)
                 });
+            }
+            ipc::OP_STATUS => {
+                let st = sim_types::DeviceStatus {
+                    free_ram_at_boot: 0, // not measurable (see MAX_INPUT)
+                    heap_limit: HEAP_LIMIT as u64,
+                    max_input: MAX_INPUT as u64,
+                    signer: signer.address().map(|a| a.to_vec()).unwrap_or_default().into(),
+                };
+                reply(mem, alloy_rlp::encode(&st), |_, _| Vec::new());
             }
             ipc::OP_ADDRESS => {
                 let a = signer.address().map(|a| a.to_vec()).unwrap_or_default();

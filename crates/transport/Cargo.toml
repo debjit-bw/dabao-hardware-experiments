@@ -15,6 +15,7 @@ xous = "0.9.71"
 xous-names = { package = "xous-api-names", version = "0.9.72" }
 log-server = { package = "xous-api-log", version = "0.1.70" }
 sim-types = { path = "../sim-types" }
+alloy-rlp = { version = "0.3.16", default-features = false }
 
 # device builds only: the dabao vendor HID interface (as eth-burner)
 usb-bao1x = { path = "../../../dabao-workshop/xous-core/services/usb-bao1x", optional = true }

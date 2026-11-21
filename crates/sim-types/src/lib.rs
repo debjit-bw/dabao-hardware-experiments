@@ -178,6 +178,20 @@ pub struct SignResult {
     pub signer: Address,
 }
 
+/// Reply to `wire::TYPE_STATUS`: the verifier's memory budget.
+#[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct DeviceStatus {
+    /// Free physical RAM, bytes; 0 = not measured (Xous maps memory lazily, so the verifier
+    /// can't probe it safely; kept for a future kernel-side query).
+    pub free_ram_at_boot: u64,
+    /// The verifier's heap cap, bytes.
+    pub heap_limit: u64,
+    /// Largest `SimInput` the verifier accepts, bytes (from the memory model).
+    pub max_input: u64,
+    /// The signer's address, if attached (empty otherwise).
+    pub signer: Bytes,
+}
+
 /// Host <-> device framing (same envelope as eth-burner): `length (u32 BE) || type || message`;
 /// `length` counts `type || message`. Over USB HID it is cut into 64-byte reports, zero-padded.
 pub mod wire {
@@ -191,6 +205,8 @@ pub mod wire {
     pub const TYPE_SIGN: u8 = 0x12;
     /// message: empty; reply: the device's 20-byte signing address.
     pub const TYPE_ADDRESS: u8 = 0x13;
+    /// message: empty; reply: RLP `DeviceStatus`.
+    pub const TYPE_STATUS: u8 = 0x14;
     /// reply only: UTF-8 error from the transport (bad frame, unknown type, verifier down).
     pub const TYPE_ERROR: u8 = 0x7f;
 
@@ -228,6 +244,8 @@ pub mod ipc {
     pub const OP_SIMULATE: usize = 1;
     pub const OP_SIGN: usize = 2;
     pub const OP_ADDRESS: usize = 3;
+    /// -> RLP `DeviceStatus`.
+    pub const OP_STATUS: usize = 4;
     pub const OP_SIGNER_WAIT: usize = 10;
     pub const OP_SIGNER_RESULT: usize = 11;
 }
