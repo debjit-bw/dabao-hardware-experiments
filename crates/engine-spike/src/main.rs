@@ -45,6 +45,9 @@ fn main() {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     log::info!("engine-spike, PID {}", xous::process::id());
+    // Give USB time to enumerate and the host time to open the serial port: log lines
+    // mirrored to USB before a listener exists are dropped.
+    std::thread::sleep(std::time::Duration::from_secs(10));
 
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
@@ -56,11 +59,15 @@ fn main() {
     // StatelessValidationResult SSZ: new_payload_request_root (32) | successful_validation (1) | ...
     let valid = out.get(32) == Some(&1);
     let matches = out == SMOKE_OUT;
-    log::info!(
-        "smoke: successful_validation={valid} output_matches_expected={matches} time={elapsed:?} peak_heap={peak} B (input {} B)",
-        SMOKE_IN.len()
-    );
-    if !matches {
-        log::error!("output {out:02x?}\nexpected {SMOKE_OUT:02x?}");
+    // Repeat forever so a late-attaching serial console still sees the result.
+    loop {
+        log::info!(
+            "smoke: successful_validation={valid} output_matches_expected={matches} time={elapsed:?} peak_heap={peak} B (input {} B)",
+            SMOKE_IN.len()
+        );
+        if !matches {
+            log::error!("output {out:02x?}\nexpected {SMOKE_OUT:02x?}");
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
     }
 }

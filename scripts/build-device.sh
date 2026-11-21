@@ -2,7 +2,8 @@
 # Build a dabao device image: our engine as an XIP service in the system image
 # (xous.img), and one detached app (default: eth-burner) in the apps image.
 #
-#   scripts/build-device.sh [path/to/app-elf] [extra xtask args...]
+#   scripts/build-device.sh [path/to/app-elf | xous-core-app-crate] [extra xtask args...]
+#   GENERIC_HID=0 scripts/build-device.sh dabao-console   # USB serial console (logs mirrored), no HID
 #
 # Afterwards it checks both images against their real RRAM regions, because
 # xous-sign-image only checks the system image against the *end of RRAM*
@@ -17,7 +18,12 @@ XOUS_CORE="${XOUS_CORE:-$here/../dabao-workshop/xous-core}"
 XOUS_CORE="$(cd "$XOUS_CORE" && pwd)"
 app="${1:-$XOUS_CORE/../ethereum-app/dabao-app-eth-burner/target/riscv32imac-unknown-xous-elf/release/eth-burner}"
 shift || true
-app="$(cd "$(dirname "$app")" && pwd)/$(basename "$app")"
+# paths are made absolute (xtask runs in $XOUS_CORE); bare names are xous-core app crates
+case "$app" in */*) app="$(cd "$(dirname "$app")" && pwd)/$(basename "$app")" ;; esac
+# generic-hid (eth-burner's transport) replaces the composite USB device, so there is no USB
+# serial console and logs only reach the DUART (PB13/PB14). GENERIC_HID=0 keeps the console.
+usb_feature=(--feature usb-bao1x/generic-hid)
+[ "${GENERIC_HID:-1}" = 0 ] && usb_feature=()
 
 # Region sizes, from xous-core libs/bao1x-api/src/offsets/{common,dabao}.rs and signatures.rs:
 #   SIGBLOCK_LEN   = 0x300
@@ -39,7 +45,7 @@ if [ ! -s "$XOUS_CORE/target/SVD_PATH" ]; then
     touch "$XOUS_CORE/utralib/bao1x/core.svd"
 fi
 
-(cd "$XOUS_CORE" && cargo xtask dabao "$app" --feature usb-bao1x/generic-hid \
+(cd "$XOUS_CORE" && cargo xtask dabao "$app" ${usb_feature[@]+"${usb_feature[@]}"} \
     --service "engine-spike~flash:$engine" "$@")
 
 out="$XOUS_CORE/target/riscv32imac-unknown-xous-elf/release"

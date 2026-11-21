@@ -1,0 +1,8 @@
+target/
+*.uf2
+*.img
+.DS_Store
+
+# raw boot1 audit output: contains device UUID / serializer
+audit/
+__pycache__/
