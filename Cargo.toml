@@ -6,6 +6,7 @@ members = [
     "crates/xous-evm",
     "crates/verifier",
     "crates/transport",
+    "crates/signer",
     "host/dabao-host",
 ]
 

@@ -10,7 +10,10 @@ use std::{
 
 use alloy_primitives::U256;
 use anyhow::{Context, Result, bail};
-use sim_types::{SimResult, wire};
+use alloy::consensus::{Transaction, TxEnvelope, transaction::SignerRecoverable};
+use alloy::eips::eip2718::Decodable2718;
+use alloy_primitives::Address;
+use sim_types::{SignResult, SimInput, SimResult, wire};
 
 const VID: u16 = 0x1d50;
 const PID: u16 = 0x6197;
@@ -18,28 +21,90 @@ const PID: u16 = 0x6197;
 /// VID/PID but exposes keyboard/FIDO interfaces: never open those.
 const VENDOR_USAGE_PAGE: u16 = 0xFF00;
 
-pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
-    let frame = wire::encode_frame(wire::TYPE_SIMULATE, input);
+/// One request/reply exchange; returns the reply's `type || message`, checked against `want`.
+fn exchange(ty: u8, message: &[u8], want: u8, tcp: Option<&str>) -> Result<(Vec<u8>, Duration)> {
+    let frame = wire::encode_frame(ty, message);
     let start = Instant::now();
     let reply = match tcp {
         Some(addr) => tcp_roundtrip(addr, &frame)?,
         None => hid_roundtrip(&frame)?,
     };
     let rtt = start.elapsed();
-    let (&ty, msg) = reply.split_first().context("empty reply")?;
-    match ty {
-        wire::TYPE_SIMULATE => {}
-        wire::TYPE_ERROR => bail!("transport error: {}", String::from_utf8_lossy(msg)),
-        t => bail!("unexpected reply type {t:#x}"),
-    }
     if let Ok(path) = std::env::var("DABAO_DUMP") {
         std::fs::write(&path, &reply)?; // raw `type || message` of the reply, for debugging
     }
+    let (&rty, msg) = reply.split_first().context("empty reply")?;
+    if rty == wire::TYPE_ERROR {
+        bail!("transport error: {}", String::from_utf8_lossy(msg));
+    }
+    if rty != want {
+        bail!("unexpected reply type {rty:#x}");
+    }
+    Ok((msg.to_vec(), rtt))
+}
+
+pub fn address(tcp: Option<&str>) -> Result<Address> {
+    let (a, _) = exchange(wire::TYPE_ADDRESS, &[], wire::TYPE_ADDRESS, tcp)?;
+    if a.len() != 20 {
+        bail!("bad address length {}", a.len());
+    }
+    Ok(Address::from_slice(&a))
+}
+
+pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
+    let (msg, rtt) = exchange(wire::TYPE_SIMULATE, input, wire::TYPE_SIMULATE, tcp)?;
     let r: SimResult = alloy_rlp::Decodable::decode(&mut &msg[..]).context("decode SimResult")?;
     println!("sent {} B, round trip {rtt:?} (verifier: {} us, peak heap {} B)", input.len(), r.micros, r.peak_heap);
+    print_sim(&r);
+    Ok(())
+}
+
+/// Ask the device to simulate and sign; independently check what comes back.
+pub fn sign(input: &[u8], tcp: Option<&str>) -> Result<()> {
+    let req: SimInput = alloy_rlp::Decodable::decode(&mut &input[..]).context("decode SimInput")?;
+    let (msg, rtt) = exchange(wire::TYPE_SIGN, input, wire::TYPE_SIGN, tcp)?;
+    let r: SignResult = alloy_rlp::Decodable::decode(&mut &msg[..]).context("decode SignResult")?;
+    println!(
+        "sign request {} B, round trip {rtt:?} (verifier: {} us, peak heap {} B); device address {}",
+        input.len(),
+        r.sim.micros,
+        r.sim.peak_heap,
+        r.signer
+    );
+    print_sim(&r.sim);
+    if !r.refused.is_empty() {
+        println!("NOT SIGNED: {}", String::from_utf8_lossy(&r.refused));
+        return Ok(());
+    }
+    // Don't trust the device's word either: decode, recover, compare with what we asked for.
+    let tx = TxEnvelope::decode_2718(&mut &r.signed_tx[..]).context("decode signed tx")?;
+    let recovered = tx.recover_signer().context("recover signer")?;
+    let t = &req.tx;
+    let checks = [
+        ("signer == device address", recovered == r.signer),
+        ("signer == tx.from", recovered == t.from),
+        ("chain id", tx.chain_id() == Some(req.chain_id)),
+        ("nonce", tx.nonce() == t.nonce),
+        ("to", tx.to() == Some(t.to)),
+        ("value", tx.value() == t.value),
+        ("gas limit", tx.gas_limit() == t.gas_limit),
+        ("gas price", tx.gas_price() == Some(t.gas_price)),
+        ("calldata", tx.input() == &t.data),
+    ];
+    for (what, ok) in &checks {
+        println!("  check {what}: {}", if *ok { "ok" } else { "MISMATCH" });
+    }
+    if checks.iter().any(|(_, ok)| !ok) {
+        bail!("the signed transaction does not match the request");
+    }
+    println!("SIGNED ({} B, tx hash {}): 0x{}", r.signed_tx.len(), tx.tx_hash(), alloy_primitives::hex::encode(&r.signed_tx));
+    Ok(())
+}
+
+fn print_sim(r: &SimResult) {
     if !r.error.is_empty() {
         println!("REJECTED: {}", String::from_utf8_lossy(&r.error));
-        return Ok(());
+        return;
     }
     println!("success={} gas_used={} output={}", r.success, r.gas_used, r.output);
     for l in &r.logs {
@@ -59,7 +124,6 @@ pub fn send(input: &[u8], tcp: Option<&str>) -> Result<()> {
             println!("    slot {:#x}: {} -> {}", s.slot, s.before, s.after);
         }
     }
-    Ok(())
 }
 
 fn tcp_roundtrip(addr: &str, frame: &[u8]) -> Result<Vec<u8>> {

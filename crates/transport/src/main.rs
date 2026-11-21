@@ -20,6 +20,11 @@ impl Verifier {
     }
 
     fn simulate(&self, input: &[u8]) -> Result<Vec<u8>, String> {
+        self.call(ipc::OP_SIMULATE, input)
+    }
+
+    /// Lend `input` (plus room for the reply) with `op`; returns the verifier's reply bytes.
+    fn call(&self, op: usize, input: &[u8]) -> Result<Vec<u8>, String> {
         // room for the reply too (logs and state changes), page-rounded
         let cap = (input.len().max(16 * 1024) + 4095) & !4095;
         let mut range = xous::map_memory(None, None, cap, xous::MemoryFlags::R | xous::MemoryFlags::W)
@@ -28,7 +33,7 @@ impl Verifier {
         unsafe { range.as_slice_mut::<u8>()[..input.len()].copy_from_slice(input) };
         let r = xous::send_message(
             self.0,
-            xous::Message::new_lend_mut(ipc::OP_SIMULATE, range, None, xous::MemorySize::new(input.len())),
+            xous::Message::new_lend_mut(op, range, None, xous::MemorySize::new(input.len())),
         );
         let out = match r {
             Ok(xous::Result::MemoryReturned(_, Some(valid))) => {
@@ -53,6 +58,15 @@ fn handle(body: &[u8], verifier: &Verifier) -> Vec<u8> {
             Ok(result) => wire::encode_frame(wire::TYPE_SIMULATE, &result),
             Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
         },
+        wire::TYPE_SIGN => match verifier.call(ipc::OP_SIGN, message) {
+            Ok(result) => wire::encode_frame(wire::TYPE_SIGN, &result),
+            Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
+        },
+        wire::TYPE_ADDRESS => match verifier.call(ipc::OP_ADDRESS, &[]) {
+            Ok(a) if a.len() == 20 => wire::encode_frame(wire::TYPE_ADDRESS, &a),
+            Ok(_) => wire::encode_frame(wire::TYPE_ERROR, b"no signer attached"),
+            Err(e) => wire::encode_frame(wire::TYPE_ERROR, e.as_bytes()),
+        },
         _ => wire::encode_frame(wire::TYPE_ERROR, b"unknown message type"),
     }
 }
@@ -63,6 +77,17 @@ fn main() -> ! {
     log::info!("{VERSION}, PID {}", xous::process::id());
     let verifier = Verifier::connect();
     log::info!("connected to the verifier");
+    // Don't listen to the host before the signer is attached: no host input is processed
+    // until the trusted processes are up.
+    loop {
+        match verifier.call(ipc::OP_ADDRESS, &[]) {
+            Ok(a) if a.len() == 20 => {
+                log::info!("signer attached, device address 0x{}", a.iter().map(|b| format!("{b:02x}")).collect::<String>());
+                break;
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
     serve(&verifier)
 }
 

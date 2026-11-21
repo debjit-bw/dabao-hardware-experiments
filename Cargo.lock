@@ -1506,6 +1506,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common 0.1.6",
+ "inout",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1696,6 +1706,7 @@ dependencies = [
  "alloy",
  "alloy-primitives",
  "alloy-rlp",
+ "alloy-trie",
  "anyhow",
  "hidapi",
  "sim-types",
@@ -2767,6 +2778,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2960,6 +2980,22 @@ checksum = "dd5dc2c0d691cbf7595cde551ced329cca99c2387c2cbc97754c5d0cd045d3ee"
 dependencies = [
  "digest 0.10.7",
  "sha3-asm",
+]
+
+[[package]]
+name = "keystore-api"
+version = "0.1.0"
+dependencies = [
+ "cipher",
+ "locales",
+ "num-derive",
+ "num-traits",
+ "precursor-hal",
+ "rkyv",
+ "xous",
+ "xous-api-names",
+ "xous-ipc",
+ "zeroize",
 ]
 
 [[package]]
@@ -3613,6 +3649,10 @@ checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
 ]
+
+[[package]]
+name = "precursor-hal"
+version = "0.1.0"
 
 [[package]]
 name = "primeorder"
@@ -5160,6 +5200,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "signer"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-rlp",
+ "getrandom 0.2.12",
+ "k256",
+ "keystore-api",
+ "log",
+ "sha2 0.10.9",
+ "sim-types",
+ "utralib",
+ "xous",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-ipc",
+ "zeroize",
+]
+
+[[package]]
 name = "sim-types"
 version = "0.1.0"
 dependencies = [
@@ -5892,6 +5954,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 name = "verifier"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "alloy-rlp",
  "log",
  "sim-types",

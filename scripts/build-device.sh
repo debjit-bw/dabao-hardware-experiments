@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build a dabao device image. Default: the verifier (process 2) as an XIP service in the
-# system image (xous.img) and the transport (process 1, USB HID) in the apps image.
+# system image (xous.img); the transport (process 1, USB HID) and the signer (process 3,
+# keystore app slots) in the apps image.
 #
 #   scripts/build-device.sh [path/to/app-elf | xous-core-app-crate] [extra xtask args...]
 #   SERVICE=engine-spike GENERIC_HID=0 scripts/build-device.sh dabao-console   # the benchmark spike,
@@ -37,6 +38,10 @@ APPS_MAX=$(( 0xDA300 ))      # APP_RRAM_LEN
 SERVICE="${SERVICE:-verifier}"
 (cd "$here" && cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf)
 (cd "$here" && cargo build --release -p transport --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
+(cd "$here" && cargo build --release -p signer --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
+# the signer goes into the apps image next to the app (unless building something else)
+extra_apps=()
+[ "$SERVICE" = verifier ] && extra_apps=("$here/target/riscv32imac-unknown-xous-elf/release/signer")
 engine="$here/target/riscv32imac-unknown-xous-elf/release/$SERVICE"
 
 # Upstream's Rust 1.100 fix (betrusted-io/xous-core#1023) keeps ONE target/SVD_PATH shared by
@@ -48,7 +53,7 @@ if [ ! -s "$XOUS_CORE/target/SVD_PATH" ]; then
     touch "$XOUS_CORE/utralib/bao1x/core.svd"
 fi
 
-(cd "$XOUS_CORE" && cargo xtask dabao "$app" ${usb_feature[@]+"${usb_feature[@]}"} \
+(cd "$XOUS_CORE" && cargo xtask dabao "$app" ${extra_apps[@]+"${extra_apps[@]}"} ${usb_feature[@]+"${usb_feature[@]}"} \
     --service "$SERVICE~flash:$engine" "$@")
 
 out="$XOUS_CORE/target/riscv32imac-unknown-xous-elf/release"

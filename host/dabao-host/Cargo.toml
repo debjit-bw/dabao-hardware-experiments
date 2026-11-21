@@ -7,9 +7,10 @@ description = "Host companion: build SimInputs from a JSON-RPC node (eth_getProo
 
 [dependencies]
 sim-types = { path = "../../crates/sim-types" }
-alloy = { version = "2.4.2", default-features = false, features = ["providers", "provider-http", "rpc-types", "consensus", "reqwest-rustls-tls"] }
+alloy = { version = "2.4.2", default-features = false, features = ["providers", "provider-http", "rpc-types", "consensus", "k256", "reqwest-rustls-tls"] }
 alloy-primitives = { version = "1.6.1" }
 alloy-rlp = { version = "0.3.16" }
+alloy-trie = { version = "0.9.5" }
 anyhow = "1.0"
 hidapi = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -2,8 +2,12 @@
 //!
 //!   dabao-host build <out.rlp>              build a SimInput from a JSON-RPC node (RPC_URL,
 //!                                           default publicnode): WETH transfer(0x…dEaD, 1)
-//!   dabao-host send <in.rlp> [--tcp ADDR]   send it to the device (USB HID) or the emulator
-//!                                           (TCP, e.g. 127.0.0.1:7610) and print the SimResult
+//!   dabao-host send <in.rlp> [--tcp ADDR]   simulate on the device (USB HID) or the emulator
+//!                                           (TCP, e.g. 127.0.0.1:7610); print the SimResult
+//!   dabao-host sign <in.rlp> [--tcp ADDR]   simulate + policy + sign; checks the signature
+//!   dabao-host address [--tcp ADDR]         the device's signing address
+//!   dabao-host build-synthetic <from> <out.rlp>   SYNTHETIC state where <from> holds 1 ETH
+//!                                           (tests the sign path; not mainnet state)
 //!
 //! `build`: a WETH `transfer(0x…dEaD, 1)` from a WETH holder seen in the latest block,
 //! simulated on top of that block's post-state.
@@ -47,22 +51,31 @@ fn balance_of_calldata(who: Address) -> Bytes {
 }
 
 mod send;
+mod synthetic;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("build") => build(args.get(1).context("usage: dabao-host build <out.rlp>")?).await,
-        Some("send") => {
-            let path = args.get(1).context("usage: dabao-host send <in.rlp> [--tcp ADDR]")?;
-            let tcp = match args.get(2).map(String::as_str) {
-                Some("--tcp") => Some(args.get(3).context("--tcp needs an address")?.clone()),
-                Some(other) => bail!("unknown option {other}"),
-                None => None,
-            };
-            send::send(&std::fs::read(path)?, tcp.as_deref())
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let tcp = match args.iter().position(|a| a == "--tcp") {
+        Some(i) => {
+            let addr = args.get(i + 1).context("--tcp needs an address")?.clone();
+            args.drain(i..i + 2);
+            Some(addr)
         }
-        _ => bail!("usage: dabao-host build <out.rlp> | send <in.rlp> [--tcp ADDR]"),
+        None => None,
+    };
+    let tcp = tcp.as_deref();
+    let usage = "usage: dabao-host build <out.rlp> | build-synthetic <from> <out.rlp> | send <in.rlp> | sign <in.rlp> | address  [--tcp ADDR]";
+    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["build", out] => build(out).await,
+        ["build-synthetic", from, out] => synthetic::build(from.parse()?, out),
+        ["send", path] => send::send(&std::fs::read(path)?, tcp),
+        ["sign", path] => send::sign(&std::fs::read(path)?, tcp),
+        ["address"] => {
+            println!("{}", send::address(tcp)?);
+            Ok(())
+        }
+        _ => bail!("{usage}"),
     }
 }
 

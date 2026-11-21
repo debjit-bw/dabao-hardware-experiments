@@ -93,6 +93,27 @@ pub struct SlotChange {
     pub after: U256,
 }
 
+/// Verifier -> signer: a transaction the verifier simulated and approved. The signer builds
+/// and signs exactly this (EIP-155 legacy, `gas_price` as simulated); it never signs a hash
+/// it didn't compute itself.
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct SignJob {
+    pub chain_id: u64,
+    pub tx: SimTx,
+}
+
+/// Reply to `wire::TYPE_SIGN`: the simulation, and either a refusal or the signed tx.
+#[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct SignResult {
+    pub sim: SimResult,
+    /// Non-empty: not signed, and why (simulation error, revert, policy).
+    pub refused: Bytes,
+    /// EIP-2718 encoding of the signed tx (legacy: plain RLP), ready for eth_sendRawTransaction.
+    pub signed_tx: Bytes,
+    /// This device's signing address.
+    pub signer: Address,
+}
+
 /// Host <-> device framing (same envelope as eth-burner): `length (u32 BE) || type || message`;
 /// `length` counts `type || message`. Over USB HID it is cut into 64-byte reports, zero-padded.
 pub mod wire {
@@ -102,6 +123,10 @@ pub mod wire {
     pub const TYPE_SIMULATE: u8 = 0x10;
     /// message: empty; reply: UTF-8 version string.
     pub const TYPE_VERSION: u8 = 0x11;
+    /// message: RLP `SimInput`; reply: RLP `SignResult` (simulated, policy-checked, signed).
+    pub const TYPE_SIGN: u8 = 0x12;
+    /// message: empty; reply: the device's 20-byte signing address.
+    pub const TYPE_ADDRESS: u8 = 0x13;
     /// reply only: UTF-8 error from the transport (bad frame, unknown type, verifier down).
     pub const TYPE_ERROR: u8 = 0x7f;
 
@@ -123,10 +148,22 @@ pub mod wire {
     }
 }
 
-/// Transport -> verifier IPC (Xous). The transport lends a buffer holding RLP `SimInput`
-/// (`valid` = its length); the verifier writes RLP `SimResult` into the same buffer and
-/// returns it with `valid` = the result length.
+/// Xous IPC. All calls lend a buffer; the reply is written into it (`valid` = reply length).
+///
+/// Transport -> verifier, on `VERIFIER_SERVER_NAME` (one connection):
+/// `OP_SIMULATE` (RLP `SimInput` -> RLP `SimResult`), `OP_SIGN` (RLP `SimInput` -> RLP
+/// `SignResult`), `OP_ADDRESS` (-> 20-byte address, or empty while no signer is attached).
+///
+/// Signer -> verifier, on `SIGNER_CHANNEL_NAME` (one connection). The signer has no server of
+/// its own, so nothing can send it requests: it lends `OP_SIGNER_WAIT` (its 20-byte address)
+/// and blocks until the verifier returns it holding an RLP `SignJob`; then it lends
+/// `OP_SIGNER_RESULT` holding the EIP-2718 signed tx (empty if it refused).
 pub mod ipc {
     pub const VERIFIER_SERVER_NAME: &str = "_EVM verifier_";
+    pub const SIGNER_CHANNEL_NAME: &str = "_EVM verifier signer channel_";
     pub const OP_SIMULATE: usize = 1;
+    pub const OP_SIGN: usize = 2;
+    pub const OP_ADDRESS: usize = 3;
+    pub const OP_SIGNER_WAIT: usize = 10;
+    pub const OP_SIGNER_RESULT: usize = 11;
 }
