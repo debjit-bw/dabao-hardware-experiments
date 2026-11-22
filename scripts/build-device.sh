@@ -62,8 +62,24 @@ if [ ! -s "$XOUS_CORE/target/SVD_PATH" ]; then
     touch "$XOUS_CORE/utralib/bao1x/core.svd"
 fi
 
+# Image signing embeds `git describe`, which needs upstream's version tags. A clone of the fork
+# has none, so give the pinned commit's version. (Another commit must bring its own tags.)
+PINNED_REV=c8aeac994cadacee6dda0ac55889fb2b0fe141dd
+PINNED_DESCRIBE=v0.10.2-179-gc8aeac994
+version_args=()
+if ! git -C "$XOUS_CORE" describe --long --match 'v[0-9]*' >/dev/null 2>&1; then
+    if [ "$(git -C "$XOUS_CORE" rev-parse HEAD)" = "$PINNED_REV" ]; then
+        version_args=(--git-describe "$PINNED_DESCRIBE")
+        echo "no version tags in xous-core: using $PINNED_DESCRIBE (the pinned commit)"
+    else
+        echo "ERROR: xous-core has no version tags to sign images with. Run:" >&2
+        echo "  git -C '$XOUS_CORE' fetch https://github.com/betrusted-io/xous-core.git 'refs/tags/v*:refs/tags/v*'" >&2
+        exit 1
+    fi
+fi
+
 (cd "$XOUS_CORE" && cargo xtask dabao "$app" ${extra_apps[@]+"${extra_apps[@]}"} ${usb_feature[@]+"${usb_feature[@]}"} \
-    --service "$SERVICE~flash:$engine" "$@")
+    ${version_args[@]+"${version_args[@]}"} --service "$SERVICE~flash:$engine" "$@")
 
 out="$XOUS_CORE/target/riscv32imac-unknown-xous-elf/release"
 fail=0

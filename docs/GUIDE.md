@@ -1097,6 +1097,8 @@ alone is unsafe.
 1. Commit inside `vendor/xous-core`, on branch `dabao-hackathon`.
 2. Push that branch to the fork **first**.
 3. Commit the new submodule pointer here. Otherwise nobody else can clone the repo.
+4. Update `PINNED_REV` and `PINNED_DESCRIBE` (`git -C vendor/xous-core describe --long`) in
+   `scripts/build-device.sh`. Clones of the fork have no version tags, and image signing needs them.
 
 ### Rules not to break
 
