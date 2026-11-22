@@ -73,6 +73,13 @@ daily limits: 0.005 ETH, 0.002 WETH, 1 USDC
 Every `sign` / `send-tx` prints the policy's notes (e.g. "ETH: 0.00103 ETH this tx,
 0.00103 ETH of 0.005 ETH today") and its violations.
 
+## On the board (policy v3, 2026-11-22)
+
+Refused for the expected reason: swap output to the router or to another recipient, excess ETH
+left in the router, 10% slippage, plain ETH to a callable contract, drain, over the daily limit.
+Honest swap with 1% slippage: [executed](https://sepolia.etherscan.io/tx/0xb159926d83387255111ddf583c80ffb6f2c8d75e471a7b58f6bb3ca1386f71f4),
+gas and logs as predicted.
+
 ## Limits / next
 
 - **Counters are stored by position**: inserting or reordering limits resets today's spending.

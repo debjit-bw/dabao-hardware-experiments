@@ -370,14 +370,14 @@ counts as spending its full amount.
 
 | Thing | Number |
 |---|---|
-| Simulate a WETH transfer (23 KB witness) | 44 ms, 420 KB peak memory |
-| Simulate a swap (131 KB witness) | 218 ms, 699 KB peak memory |
+| Simulate a Sepolia swap (117 KB witness) | 201 ms, 436 KB peak memory |
+| Sign a wrap, all checks (17 KB witness) | 0.84 s, 116 KB peak memory |
 | Verify one committee signature | about 0.7 s |
 | Sign a simple send, all checks | about 0.84 s on the chip |
-| Safe co-sign, all checks (about 98 KB) | about 1 s on the chip, 4.4 s with USB |
+| Safe co-sign, all checks (about 98 KB) | about 1 s on the chip, 4.4 s with USB, 379 to 390 KB peak memory |
 | Load committee keys after boot | about 7 s |
 | USB speed | about 28 KB/s |
-| System image | 2,126,352 of 2,490,368 bytes |
+| System image | 2,130,448 of 2,490,368 bytes |
 | Apps image | 336,640 of 893,696 bytes |
 
 ---
@@ -1116,6 +1116,7 @@ alone is unsafe.
 |---|---|---|
 | `no Dabao vendor HID interface` | The board is in boot1, unplugged, or runs a console image. | Type `boot` on the boot1 console, or flash the normal image. |
 | `boot1 not found` | The app is running. | Press reset while the flash script waits. |
+| USB dead right after `boot` | Seen once after a flash, cause unknown. | Unplug, replug holding PROG, then `boot`. |
 | `verifier unresponsive` | The verifier crashed, usually out of memory. | Press reset, boot, retry with a smaller transaction. |
 | `exceeds the device's limit` | The witness is over 140 KiB. | Use a simpler transaction. Raise the limit only after measuring on the board. |
 | `no sync committee loaded` | Keys are lost at each reboot. | `lc-sync` |

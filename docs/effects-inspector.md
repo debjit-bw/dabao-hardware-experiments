@@ -113,6 +113,10 @@ Effects on the device are identical to the host's. Most of the round trip is HID
 3. **Emulator heap numbers run ~10–15% above the board's** (64-bit vs 32-bit): 466 / 665 /
    798 KB in the emulator vs 420 / 594 / 699 KB on the chip.
 
+4. **revm preallocates 256 KiB.** Eight call frames with a 32 KiB stack each, before running
+   anything. The verifier builds its EVM with an empty frame stack and doesn't keep bytecode
+   twice: the Sepolia swap fixture now peaks at 436 KB on the chip (was ~675 KB).
+
 Robustness (done):
 - The verifier refuses inputs over **140 KB** before decoding ("input too large for this
   device"), just above the largest input measured to work (131 KB → 714 KB peak). Free RAM

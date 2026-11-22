@@ -42,7 +42,21 @@ context on the latest state, no signatures needed).
 A reverted execution still publishes both signatures. They work only until the deadline, and
 only with the same checks.
 
-## On the board (Sepolia, 2026-11-22)
+## On the board (Sepolia, 2026-11-22): contract v2
+
+| Case | Result |
+|---|---|
+| Safe → 0.00001 ETH | [executed](https://sepolia.etherscan.io/tx/0x9bdec7d9382e95027ffddd0b225f3a4ef0d1b72a1b7ac1fa8c3c47d377778b9f), logs identical |
+| router payment, the router switches to keeping the change after co-signing | [reverted](https://sepolia.etherscan.io/tx/0xecd695670ad744233f157e96d1a25602c400ee6ed772c9533f93c5a10b1c971e); the Safe kept everything |
+| that transaction's published signatures, replayed on a fork after a 1 ETH deposit with the router switched | revert: the deposit doesn't absorb the loss |
+| the same signatures, live, same nonce and state | would execute before the deadline; `GS013` after it |
+| honest router payment | [executed](https://sepolia.etherscan.io/tx/0x47003d0665bf6901a9ac34f63f7f0d4b79bc03ff5ebedcb8df5a856afc1e3823), logs identical |
+| drain; WETH to the router; a call to the Safe itself; no light-client proof | all refused |
+
+Cost on the device: verifier ~1.0 s including the light client, peak heap 379–390 KB for
+96–100 KB witnesses.
+
+## Earlier runs: contract v1
 
 These runs used contract v1 (`0xf864…310F`: absolute floors, no deadline), which had two holes
 fixed in v2: deposits absorbed losses, and published signatures never expired.

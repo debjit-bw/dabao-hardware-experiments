@@ -57,6 +57,10 @@ agent. When they ran, `run.sh` also let the agent read files outside the inbox, 
 included, and offered it a shell. It now gives the agent only `Read`/`Glob` inside `demo/agent`
 and the three wallet tools.
 
+Re-run on 2026-11-22 with the confined agent, policy v3 and postcondition v2: the agent paid
+INV-0042 ([tx](https://sepolia.etherscan.io/tx/0xed4d9b7f3938f45ef594cf78191b51dfc464d583fd1732314872668167fccaaf)) and
+declined INV-0043. The fooled agent was refused by the board and the agent's key alone by the Safe.
+
 ## What it does not stop
 
 - **A compromised host**, as long as the recovery key is on it (see the top of this page).
