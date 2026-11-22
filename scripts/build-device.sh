@@ -20,8 +20,6 @@ XOUS_CORE="${XOUS_CORE:-$here/vendor/xous-core}"
 XOUS_CORE="$(cd "$XOUS_CORE" && pwd)"
 app="${1:-$here/target/riscv32imac-unknown-xous-elf/release/transport}"
 shift || true
-# paths are made absolute (xtask runs in $XOUS_CORE); bare names are xous-core app crates
-case "$app" in */*) app="$(cd "$(dirname "$app")" && pwd)/$(basename "$app")" ;; esac
 # generic-hid (eth-burner's transport) replaces the composite USB device, so there is no USB
 # serial console and logs only reach the DUART (PB13/PB14). GENERIC_HID=0 keeps the console.
 usb_feature=(--feature usb-bao1x/generic-hid)
@@ -45,6 +43,13 @@ svc_features=()
 extra_apps=()
 [ "$SERVICE" = verifier ] && extra_apps=("$here/target/riscv32imac-unknown-xous-elf/release/signer")
 engine="$here/target/riscv32imac-unknown-xous-elf/release/$SERVICE"
+# Paths are made absolute (xtask runs in $XOUS_CORE); bare names are xous-core app crates.
+# Only now: on a fresh clone the default app's directory doesn't exist until the builds above.
+case "$app" in */*)
+    [ -f "$app" ] || { echo "ERROR: app not found: $app" >&2; exit 1; }
+    app_dir="$(cd "$(dirname "$app")" && pwd)"
+    app="$app_dir/$(basename "$app")" ;;
+esac
 
 # Upstream's Rust 1.100 fix (betrusted-io/xous-core#1023) keeps ONE target/SVD_PATH shared by
 # all targets. Any hosted build (e.g. `cargo xtask dabao-emu`) rewrites it empty, and a cached
