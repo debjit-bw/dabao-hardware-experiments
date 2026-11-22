@@ -777,8 +777,8 @@ Bodies are RLP, Ethereum's simple binary format. The device is USB `1d50:6197`, 
 ### First build
 
 ```sh
-git clone --recursive https://github.com/debjit-bw/dabao-hackathon.git
-cd dabao-hackathon
+git clone --recursive https://github.com/debjit-bw/dabao-hardware-experiments.git
+cd dabao-hardware-experiments
 rustup default 1.100.0
 (cd vendor/xous-core && cargo xtask install-toolkit)
 
