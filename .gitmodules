@@ -1,0 +1,5 @@
+[submodule "vendor/xous-core"]
+	path = vendor/xous-core
+	url = https://github.com/debjit-bw/xous-core.git
+	branch = backport-rust-1.100-svd-path
+	ignore = dirty

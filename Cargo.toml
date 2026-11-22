@@ -1,5 +1,7 @@
 [workspace]
 resolver = "3"
+# xous-core (submodule) has its own workspace; its crates are path deps, not members
+exclude = ["vendor"]
 members = [
     "crates/engine-spike",
     "crates/sim-types",
@@ -19,12 +21,12 @@ members = [
 # Patches and profiles only take effect at the workspace root.
 [patch.crates-io]
 # Xous fork of getrandom (0.2.x). Relative to the repo root; assumes the default
-# XOUS_CORE layout (../dabao-workshop/xous-core) until xous-core is a submodule.
-getrandom = { path = "../dabao-workshop/xous-core/imports/getrandom" }
+# submodule vendor/xous-core (scripts/setup-xous-core.sh).
+getrandom = { path = "vendor/xous-core/imports/getrandom" }
 # as eth-burner: the transport's usb-bao1x (device builds) needs these
 usb-device = { git = "https://github.com/betrusted-io/usb-device.git", branch = "main" }
-utralib = { path = "../dabao-workshop/xous-core/utralib" }
-svd2utra = { path = "../dabao-workshop/xous-core/svd2utra" }
+utralib = { path = "vendor/xous-core/utralib" }
+svd2utra = { path = "vendor/xous-core/svd2utra" }
 
 [profile.release]
 codegen-units = 1

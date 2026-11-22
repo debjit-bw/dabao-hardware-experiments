@@ -5,6 +5,6 @@
 # Note: hosted builds empty xous-core's shared target/SVD_PATH; build-device.sh copes.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-XOUS_CORE="${XOUS_CORE:-$here/../dabao-workshop/xous-core}"
+XOUS_CORE="${XOUS_CORE:-$here/vendor/xous-core}"
 (cd "$here" && cargo build --release -p verifier -p signer -p transport)
 cd "$XOUS_CORE" && exec cargo xtask dabao-emu "$here/target/release/verifier" "$here/target/release/signer" "$here/target/release/transport"

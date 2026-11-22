@@ -18,9 +18,9 @@ sim-types = { path = "../sim-types" }
 alloy-rlp = { version = "0.3.16", default-features = false }
 
 # device builds only: the dabao vendor HID interface (as eth-burner)
-usb-bao1x = { path = "../../../dabao-workshop/xous-core/services/usb-bao1x", optional = true }
+usb-bao1x = { path = "../../vendor/xous-core/services/usb-bao1x", optional = true }
 # not used directly: the usb-bao1x client needs bao1x-api's std items
-bao1x-api = { path = "../../../dabao-workshop/xous-core/libs/bao1x-api", optional = true, features = ["std"] }
+bao1x-api = { path = "../../vendor/xous-core/libs/bao1x-api", optional = true, features = ["std"] }
 utralib = { version = "0.1.27", optional = true, default-features = false }
 
 [features]

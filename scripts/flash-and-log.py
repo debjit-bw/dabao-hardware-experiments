@@ -12,7 +12,7 @@ Needs pyserial + progressbar2 for uf2send.py; set PYTHON to an interpreter that 
 import argparse, glob, os, select, subprocess, sys, time, tty
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XOUS_CORE = os.environ.get("XOUS_CORE", os.path.join(HERE, "..", "dabao-workshop", "xous-core"))
+XOUS_CORE = os.environ.get("XOUS_CORE", os.path.join(HERE, "vendor", "xous-core"))
 PYTHON = os.environ.get("PYTHON", sys.executable)
 
 

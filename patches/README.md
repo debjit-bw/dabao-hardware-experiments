@@ -14,11 +14,12 @@ debjit-bw/xous-core, PR btchip/xous-core#1); patch 2 applies on top of it.
 
 ## Apply
 
+xous-core is the submodule `vendor/xous-core`, pinned at `36861b013` (patch 1 is that commit).
+`scripts/setup-xous-core.sh` checks it out and applies patch 2 (idempotent). By hand:
+
 ```sh
-cd "$XOUS_CORE"                       # default ../dabao-workshop/xous-core
-git checkout d1d4b9bca                # or the pinned submodule commit
-git apply ../../dabao-hackathon/patches/xous-core-backport-pr1023-svd-path.patch
-git apply ../../dabao-hackathon/patches/xous-core-keystore-app-slot-claims.patch
+git submodule update --init vendor/xous-core
+git -C vendor/xous-core apply ../../patches/xous-core-keystore-app-slot-claims.patch
 ```
 
 Check: `git apply --check` on a clean tree; after applying, `strings

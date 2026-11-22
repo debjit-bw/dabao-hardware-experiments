@@ -25,7 +25,7 @@ zeroize = "1.7"
 getrandom = "0.2"
 
 # device builds only: keystore app slots (only the IPC types: the keystore crate is a server)
-keystore-api = { path = "../../../dabao-workshop/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
+keystore-api = { path = "../../vendor/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
 xous-ipc = { version = "0.10.11", optional = true }
 utralib = { version = "0.1.27", optional = true, default-features = false }
 

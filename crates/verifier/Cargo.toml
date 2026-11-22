@@ -24,7 +24,7 @@ alloy-rlp = { version = "0.3.16", default-features = false }
 alloy-primitives = { version = "1.6.1", default-features = false }
 
 # device builds only: keystore app slots for the policy counters (as the signer)
-keystore-api = { path = "../../../dabao-workshop/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
+keystore-api = { path = "../../vendor/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
 xous-ipc = { version = "0.10.11", optional = true }
 
 [features]

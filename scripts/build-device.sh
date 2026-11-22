@@ -16,7 +16,7 @@
 # flash order). Recoverable by reflashing, but confusing; so fail the build.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-XOUS_CORE="${XOUS_CORE:-$here/../dabao-workshop/xous-core}"
+XOUS_CORE="${XOUS_CORE:-$here/vendor/xous-core}"
 XOUS_CORE="$(cd "$XOUS_CORE" && pwd)"
 app="${1:-$here/target/riscv32imac-unknown-xous-elf/release/transport}"
 shift || true
