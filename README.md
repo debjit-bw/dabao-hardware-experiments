@@ -51,7 +51,7 @@ Requirements: Rust **1.100.0** and the Xous sysroot for that version. Tested on 
 silicon) only.
 
 ```sh
-git clone --recursive <this repo> dabao-hackathon && cd dabao-hackathon
+git clone --recursive https://github.com/debjit-bw/dabao-hackathon.git && cd dabao-hackathon
 rustup default 1.100.0
 (cd vendor/xous-core && cargo xtask install-toolkit)   # Xous sysroot
 
