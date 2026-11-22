@@ -1,5 +1,7 @@
 # Dabao: an Ethereum signer that checks before it signs
 
+> Experiments pushing the Baochip Dabao to its limits: a light client, an EVM and a policy-enforcing Ethereum signer on a 2 MiB RAM microcontroller. Not audited.
+
 A signer for the Baochip Dabao (Baochip-1x, Xous). Before every signature, the board:
 
 1. **gets a trusted state root**: a light client on the chip verifies the sync committee's BLS
