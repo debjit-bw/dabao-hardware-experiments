@@ -1,0 +1,12 @@
+# Pinned so the init code (and so the CREATE2 addresses the firmware pins) is reproducible.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = []
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "none"
+cbor_metadata = false

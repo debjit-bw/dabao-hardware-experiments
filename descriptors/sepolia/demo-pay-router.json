@@ -1,0 +1,24 @@
+{
+  "$schema": "https://github.com/ethereum/clear-signing-erc7730-registry/blob/master/specs/erc7730-v1.schema.json",
+  "context": {
+    "$id": "DemoPayRouter (dabao-hackathon)",
+    "contract": {
+      "deployments": [{ "chainId": 11155111, "address": "0x1ab73Bb30Da0a020bDa2F942F524F3CA75ab5Fc7" }]
+    }
+  },
+  "metadata": {
+    "owner": "Written for dabao-hackathon (contracts/src/DemoPayRouter.sol). DEMO: a router whose owner can change its behaviour",
+    "contractName": "Demo pay router"
+  },
+  "display": {
+    "formats": {
+      "pay(address to, uint256 amount)": {
+        "intent": "Pay (change refunded)",
+        "fields": [
+          { "path": "to", "label": "To", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local"] } },
+          { "path": "amount", "label": "Amount", "format": "amount" }
+        ]
+      }
+    }
+  }
+}

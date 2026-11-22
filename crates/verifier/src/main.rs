@@ -57,8 +57,8 @@ fn error_result(e: impl Into<String>) -> SimResult {
 /// Inputs whose estimated peak memory doesn't fit are rejected up front: running out of memory
 /// aborts the verifier, which would leave the device stuck until RESET.
 fn run(input: &[u8], counters: &Counters, lc: &lc::LightClient) -> (SimResult, Vec<(usize, policy::Counter)>) {
-    let (r, u, _, _) = run_as(input, counters, lc, None);
-    (r, u)
+    let r = run_as(input, counters, lc, None);
+    (r.sim, r.updates)
 }
 
 /// The light-client check of `inp`'s parent header: proven canonical by the sync committee, and
@@ -79,15 +79,22 @@ fn header_check(inp: &SimInput, lc: &lc::LightClient) -> Result<u64, String> {
     Ok(slot)
 }
 
+/// One verifier run: the simulation with the 7730 check and policy filled in, the policy
+/// counters to persist if it is signed, the Safe's verified configuration, the attested beacon
+/// slot, and (Safe co-signing) the postcondition to wrap the call in.
+#[derive(Default)]
+struct Run {
+    sim: SimResult,
+    updates: Vec<(usize, policy::Counter)>,
+    safe: Option<sim_types::safe::State>,
+    slot: Option<u64>,
+    post: Option<Result<xous_evm::postcondition::Postcondition, String>>,
+}
+
 /// `run`; with `safe_owner = Some(device)`, `tx.from` is a Safe: the call is simulated as made
-/// by the Safe, and its configuration is read from the verified pre-state.
-#[allow(clippy::type_complexity)]
-fn run_as(
-    input: &[u8],
-    counters: &Counters,
-    lc: &lc::LightClient,
-    safe_owner: Option<Address>,
-) -> (SimResult, Vec<(usize, policy::Counter)>, Option<sim_types::safe::State>, Option<u64>) {
+/// by the Safe, its configuration is read from the verified pre-state, and the postcondition is
+/// built and checked on the simulated post-state.
+fn run_as(input: &[u8], counters: &Counters, lc: &lc::LightClient, safe_owner: Option<Address>) -> Run {
     let max = MAX_INPUT;
     if input.len() > max {
         let e = error_result(format!(
@@ -95,48 +102,59 @@ fn run_as(
             input.len(),
             estimated_peak(input.len()) / 1024
         ));
-        return (e, vec![], None, None);
+        return Run { sim: e, ..Default::default() };
     }
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
     let start = Instant::now();
-    let verified = match <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
-        Ok(inp) => header_check(&inp, lc),
-        Err(e) => Err(format!("decode SimInput: {e}")),
+    let mut inp = match <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
+        Ok(inp) => inp,
+        Err(e) => return Run { sim: error_result(format!("decode SimInput: {e}")), ..Default::default() },
     };
+    let verified = header_check(&inp, lc);
+    // the simulation decodes its own copy: drop the witness here, so it isn't in RAM twice
+    inp.state = Vec::new();
+    inp.codes = Vec::new();
+    inp.keys = Vec::new();
     let mut opts = xous_evm::sim::Options::default();
     if let Some(device) = safe_owner {
-        let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) else {
-            return (error_result("decode SimInput"), vec![], None, None);
-        };
         opts.as_contract = true;
         opts.reads = sim_types::safe::slots(device).iter().map(|s| (inp.tx.from, *s)).collect();
+        opts.code_hashes = xous_evm::postcondition::CODE_HASH_ACCOUNTS.to_vec();
     }
-    let (mut r, reads) = match xous_evm::sim::simulate_opts(input, |_| {}, &opts) {
-        Ok(x) => x,
-        Err(e) => (error_result(e), vec![]),
-    };
-    let safe = (safe_owner.is_some() && reads.len() == 6).then(|| sim_types::safe::State::from_slots(&reads.try_into().unwrap()));
-    let mut updates = Vec::new();
-    if r.error.is_empty() {
-        if let Ok(inp) = <SimInput as alloy_rlp::Decodable>::decode(&mut &input[..]) {
-            // ERC-7730: what the user would be shown vs what the simulation did
-            r.clear_sign = clear_sign::check(&DESCRIPTORS, inp.chain_id, &inp.tx, r.success, &r.effects);
-            // the device's own policy: limits, fee, slippage, allowlist
-            let out = policy::evaluate(&POLICY, &counters.values, &DESCRIPTORS, &inp, &r);
-            r.policy = out.check;
-            if !counters.ok() {
-                r.policy.violations.push(b"policy counters unreadable: can't enforce spending limits".to_vec().into());
-            }
-            updates = out.updates;
+    // the policy's limited assets on this chain are always in the postcondition
+    let limited: Vec<Address> =
+        POLICY.chains.iter().filter(|c| c.chain_id == inp.chain_id).flat_map(|c| c.limits.iter().map(|l| l.asset)).collect();
+    let res = xous_evm::sim::simulate_then(input, |_| {}, &opts, |r, reads, call| {
+        // ERC-7730: what the user would be shown vs what the simulation did
+        r.clear_sign = clear_sign::check(&DESCRIPTORS, inp.chain_id, &inp.tx, r.success, &r.effects);
+        // the device's own policy: limits, fee, slippage, allowlist
+        let out = policy::evaluate(&POLICY, &counters.values, &DESCRIPTORS, &inp, r);
+        r.policy = out.check;
+        if !counters.ok() {
+            r.policy.violations.push(b"policy counters unreadable: can't enforce spending limits".to_vec().into());
         }
+        let post = safe_owner.filter(|_| r.success && reads.slots.len() == 6).map(|device| {
+            let threshold = reads.slots[1];
+            xous_evm::postcondition::build(r, &inp.tx, device, threshold, &reads.code_hashes, &limited, call)
+        });
+        (out.updates, post)
+    });
+    let mut run = match res {
+        Ok((sim, reads, (updates, post))) => {
+            let safe = (safe_owner.is_some() && reads.slots.len() == 6)
+                .then(|| sim_types::safe::State::from_slots(&reads.slots.clone().try_into().unwrap()));
+            Run { sim, updates, safe, slot: None, post }
+        }
+        Err(e) => Run { sim: error_result(e), ..Default::default() },
+    };
+    match verified {
+        Ok(slot) => run.slot = Some(slot),
+        Err(e) => run.sim.header_check = e.into_bytes().into(),
     }
-    if let Err(e) = &verified {
-        r.header_check = e.clone().into_bytes().into();
-    }
-    r.micros = start.elapsed().as_micros() as u64;
-    r.peak_heap = (PEAK.load(Relaxed) - base) as u64;
-    (r, updates, safe, verified.ok())
+    run.sim.micros = start.elapsed().as_micros() as u64;
+    run.sim.peak_heap = (PEAK.load(Relaxed) - base) as u64;
+    run
 }
 
 /// The signing policy compiled into the firmware (crates/policy/policy.bin).
@@ -278,7 +296,7 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, lc: &m
     let Some(me) = signer.address() else {
         return SignResult { refused: b"no signer attached".to_vec().into(), ..Default::default() };
     };
-    let (sim, updates, safe_state, slot) = run_as(raw, counters, lc, safe.then_some(me));
+    let Run { sim, updates, safe: safe_state, slot, post } = run_as(raw, counters, lc, safe.then_some(me));
     let mut out = SignResult { sim, ..Default::default() };
     out.signer = me;
     let input: SimInput = match alloy_rlp::Decodable::decode(&mut &raw[..]) {
@@ -288,15 +306,24 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, lc: &m
             return out;
         }
     };
-    if safe && safe_state.is_none() {
-        out.refused = b"Safe state not verified".to_vec().into();
-        return out;
-    }
     if let Err(e) = approve(&input, &out.sim, me, safe_state.as_ref()) {
         log::info!("verifier: refused to sign: {e}");
         out.refused = e.into_bytes().into();
         return out;
     }
+    // a Safe call is co-signed only wrapped in its postcondition
+    let post = match (safe, post) {
+        (false, _) => None,
+        (true, Some(Ok(p))) => Some(p),
+        (true, Some(Err(e))) => {
+            out.refused = format!("postcondition: {e}").into_bytes().into();
+            return out;
+        }
+        (true, None) => {
+            out.refused = b"Safe state not verified".to_vec().into();
+            return out;
+        }
+    };
     // record the spending before signing: a crash after this over-counts, never under-counts
     if let Err(e) = counters.commit(&updates) {
         log::error!("verifier: {e}");
@@ -308,10 +335,24 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, lc: &m
         out.refused = b"can't persist the light client's highest slot".to_vec().into();
         return out;
     }
-    let job = match &safe_state {
-        // the Safe nonce comes from the verified state, not from the host
-        Some(st) => SignJob { chain_id: input.chain_id, tx: input.tx, kind: SignJob::SAFE, safe_nonce: st.nonce },
-        None => SignJob { chain_id: input.chain_id, tx: input.tx, kind: SignJob::TX, safe_nonce: Default::default() },
+    let job = match (&safe_state, &post) {
+        // the Safe nonce comes from the verified state, not from the host; the SafeTx is the
+        // DELEGATECALL to MultiSendCallOnly: [the simulated call, the postcondition]
+        (Some(st), Some(p)) => {
+            out.safe_data = p.safe_data.clone().into();
+            let tx = sim_types::SimTx {
+                to: sim_types::safe::MULTISEND_CALL_ONLY,
+                value: Default::default(),
+                data: p.safe_data.clone().into(),
+                ..input.tx
+            };
+            SignJob { chain_id: input.chain_id, tx, kind: SignJob::SAFE_MULTISEND, safe_nonce: st.nonce }
+        }
+        (None, None) => SignJob { chain_id: input.chain_id, tx: input.tx, kind: SignJob::TX, safe_nonce: Default::default() },
+        _ => {
+            out.refused = b"internal: Safe state and postcondition disagree".to_vec().into();
+            return out;
+        }
     };
     let signed = signer.sign(job);
     if signed.is_empty() {
@@ -400,8 +441,8 @@ fn main() -> ! {
                 });
             }
             ipc::OP_SIGN | ipc::OP_SAFE_SIGN => {
-                let raw = unsafe { mem.buf.as_slice::<u8>()[..len].to_vec() };
-                let result = sign_request(&raw, &signer, &mut counters, &mut lc, op == ipc::OP_SAFE_SIGN);
+                // borrowed, not copied: a copy would keep the whole witness in RAM twice
+                let result = sign_request(unsafe { &mem.buf.as_slice::<u8>()[..len] }, &signer, &mut counters, &mut lc, op == ipc::OP_SAFE_SIGN);
                 log_result(&result.sim);
                 reply(mem, alloy_rlp::encode(&result), |n, cap| {
                     let r = SignResult {

@@ -99,7 +99,16 @@ async fn main() -> Result<()> {
     }
     if args.first().map(String::as_str) == Some("safe") {
         let sub = args.get(1).map(String::as_str).unwrap_or("");
-        let mut a = safe::Args { to: Address::ZERO, value: U256::ZERO, data: Bytes::new(), broadcast: false, agent_only: false };
+        let mut a = safe::Args {
+            to: Address::ZERO,
+            value: U256::ZERO,
+            data: Bytes::new(),
+            broadcast: false,
+            agent_only: false,
+            local: false,
+            before_exec: None,
+            force: false,
+        };
         let mut have_to = false;
         let mut it = args.iter().skip(2);
         while let Some(k) = it.next() {
@@ -112,6 +121,9 @@ async fn main() -> Result<()> {
                 "--data" => a.data = it.next().context("--data 0x..")?.parse()?,
                 "--broadcast" => a.broadcast = true,
                 "--agent-only" => a.agent_only = true,
+                "--local" => a.local = true,
+                "--force" => a.force = true,
+                "--before-exec" => a.before_exec = Some(it.next().context("--before-exec CMD")?.clone()),
                 other => bail!("safe {sub}: unknown option {other}"),
             }
         }
@@ -121,7 +133,7 @@ async fn main() -> Result<()> {
             "info" => safe::info(&provider()?).await,
             "fund" => safe::fund(&provider()?, a.value).await,
             "send" if have_to => safe::send(&provider()?, a, tcp).await,
-            _ => bail!("usage: dabao-host safe keys | create | info | fund --value WEI | send --to ADDR [--value WEI] [--data 0x..] [--broadcast | --agent-only]  [--chain sepolia] [--tcp ADDR]"),
+            _ => bail!("usage: dabao-host safe keys | create | info | fund --value WEI | send --to ADDR [--value WEI] [--data 0x..] [--broadcast [--before-exec CMD] [--force] | --agent-only | --local]  [--chain sepolia] [--tcp ADDR]"),
         };
     }
     if args.first().map(String::as_str) == Some("send-tx") {

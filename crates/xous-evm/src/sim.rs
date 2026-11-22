@@ -12,10 +12,11 @@ use alloy_consensus::Header;
 use alloy_primitives::{Address, B256, Bytes, U256, map::B256IndexMap};
 use alloy_rlp::Decodable;
 use revm::{
-    Context, ExecuteEvm, MainBuilder, MainContext,
+    Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext,
     bytecode::Bytecode,
     context::{BlockEnv, TxEnv},
-    database_interface::Database,
+    database::CacheDB,
+    database_interface::DatabaseRef,
     primitives::TxKind,
     state::AccountInfo,
 };
@@ -30,10 +31,10 @@ struct WitnessDb<'a> {
     block_hashes: BTreeMap<u64, B256>,
 }
 
-impl Database for WitnessDb<'_> {
+impl DatabaseRef for WitnessDb<'_> {
     type Error = WitnessDbError;
 
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         Ok(self.trie.account(address)?.map(|a| AccountInfo {
             balance: a.balance,
             nonce: a.nonce,
@@ -43,18 +44,18 @@ impl Database for WitnessDb<'_> {
         }))
     }
 
-    fn storage(&mut self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+    fn storage_ref(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
         self.trie.storage(address, slot)
     }
 
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+    fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         self.bytecode
             .get(&code_hash)
             .map(|c| Bytecode::new_raw(c.clone()))
             .ok_or_else(|| WitnessDbError::TrieWitness(format!("bytecode {code_hash} not in witness")))
     }
 
-    fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
+    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
         self.block_hashes.get(&number).copied().ok_or(WitnessDbError::StateNotFound(number))
     }
 }
@@ -79,10 +80,34 @@ pub struct Options {
     /// Storage slots to read from the verified pre-state, returned in order (e.g. a Safe's
     /// owners and nonce). A slot the witness doesn't cover rejects the input (fail closed).
     pub reads: Vec<(Address, U256)>,
+    /// Accounts whose code hash to read from the verified pre-state (zero if no account).
+    pub code_hashes: Vec<Address>,
 }
+
+/// Values read from the verified pre-state, per [`Options`].
+#[derive(Debug, Default, Clone)]
+pub struct Reads {
+    pub slots: Vec<U256>,
+    pub code_hashes: Vec<B256>,
+}
+
+/// A follow-up call from `tx.from` (contract mode only) on the state after the transaction and
+/// any earlier follow-up calls: `(to, calldata) -> (success, output)`.
+pub type PostCall<'a> = dyn FnMut(Address, Vec<u8>) -> Result<(bool, Bytes), String> + 'a;
 
 /// `simulate` with [`Options`]; returns the result and the pre-state `reads`.
 pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Options) -> Result<(SimResult, Vec<U256>), String> {
+    simulate_then(raw, tamper, opts, |_, _, _| ()).map(|(r, reads, ())| (r, reads.slots))
+}
+
+/// `simulate_opts`, then `then(result, reads, call)` with `call` running follow-up calls on the
+/// post-state: e.g. the Safe postcondition the device appends to a co-signed call.
+pub fn simulate_then<R>(
+    raw: &[u8],
+    tamper: impl FnOnce(&mut SimInput),
+    opts: &Options,
+    then: impl FnOnce(&mut SimResult, &Reads, &mut PostCall) -> R,
+) -> Result<(SimResult, Reads, R), String> {
     let mut input = SimInput::decode(&mut &raw[..]).map_err(|e| format!("decode SimInput: {e}"))?;
     tamper(&mut input);
     let parent = Header::decode(&mut &input.parent_header[..]).map_err(|e| format!("decode header: {e}"))?;
@@ -100,15 +125,21 @@ pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Opti
         .iter()
         .map(|(a, slot)| trie.storage(*a, *slot).map_err(|e| format!("witness lacks {a} slot {slot:#x}: {e}")))
         .collect::<Result<Vec<U256>, String>>()?;
+    let code_hashes = opts
+        .code_hashes
+        .iter()
+        .map(|a| trie.account(*a).map(|x| x.map(|x| x.code_hash).unwrap_or_default()).map_err(|e| format!("witness lacks account {a}: {e}")))
+        .collect::<Result<Vec<B256>, String>>()?;
+    let reads = Reads { slots: reads, code_hashes };
     if opts.as_contract {
         input.tx.gas_price = 0;
         input.tx.max_priority_fee_per_gas = None;
     }
-    let db = WitnessDb {
+    let db = CacheDB::new(WitnessDb {
         trie: &trie,
         bytecode,
         block_hashes: BTreeMap::from([(parent.number, parent.hash_slow())]),
-    };
+    });
 
     let spec = crate::chainspec::spec_for(input.chain_id).ok_or_else(|| format!("chain {} not supported", input.chain_id))?;
     let spec_id = alloy_evm::spec_by_timestamp_and_block_number(&*spec, input.block.timestamp, input.block.number);
@@ -151,6 +182,7 @@ pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Opti
         })
         .build_mainnet();
     let out = evm.transact(tx).map_err(|e| format!("execution: {e:?}"))?;
+    let state = out.state.clone();
 
     let mut changes: Vec<SimChange> = out
         .state
@@ -196,5 +228,28 @@ pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Opti
         header_check: Default::default(),
     };
     r.effects = crate::effects::effects(&input.tx, &input.block, &r);
-    Ok((r, reads))
+
+    // follow-up calls see the transaction's effects
+    evm.commit(state);
+    let (from, chain_id, as_contract) = (input.tx.from, input.chain_id, opts.as_contract);
+    let mut call = |to: Address, data: Vec<u8>| -> Result<(bool, Bytes), String> {
+        if !as_contract {
+            return Err("follow-up calls are only for contract mode".into());
+        }
+        let tx = TxEnv::builder()
+            .caller(from)
+            .kind(TxKind::Call(to))
+            .gas_limit(2_000_000)
+            .gas_price(0)
+            .tx_type(Some(0))
+            .data(data.into())
+            .chain_id(Some(chain_id))
+            .build()
+            .map_err(|e| format!("tx env: {e:?}"))?;
+        let out = evm.transact(tx).map_err(|e| format!("follow-up call: {e:?}"))?;
+        evm.commit(out.state);
+        Ok((out.result.is_success(), out.result.output().cloned().unwrap_or_default()))
+    };
+    let extra = then(&mut r, &reads, &mut call);
+    Ok((r, reads, extra))
 }

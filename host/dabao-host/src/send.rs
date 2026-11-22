@@ -229,7 +229,7 @@ fn describe(e: &sim_types::Effect, chain_id: u64) -> String {
 /// The firmware's descriptor set (for its token list).
 static TOKENS: std::sync::LazyLock<clear_sign::model::DescriptorSet> = std::sync::LazyLock::new(clear_sign::builtin);
 
-fn print_sim(r: &SimResult, chain_id: u64) {
+pub fn print_sim(r: &SimResult, chain_id: u64) {
     if !r.error.is_empty() {
         println!("REJECTED: {}", String::from_utf8_lossy(&r.error));
         return;

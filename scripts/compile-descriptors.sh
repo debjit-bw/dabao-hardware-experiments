@@ -8,6 +8,7 @@ cd "$here"
 cargo run -q --release -p dabao-host -- compile-descriptors crates/clear-sign/descriptors.bin \
     --tokens descriptors/tokens.json \
     descriptors/registry/calldata-UniswapV3Router02.json \
-    descriptors/sepolia/calldata-UniswapV3Router02.sepolia.json descriptors/weth.json
+    descriptors/sepolia/calldata-UniswapV3Router02.sepolia.json descriptors/weth.json \
+    descriptors/sepolia/demo-pay-router.json
 [ -f crates/policy/policy.bin ] || : > crates/policy/policy.bin   # first build: placeholder
 cargo run -q --release -p dabao-host -- compile-policy crates/policy/policy.bin policy/policy.json

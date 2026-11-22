@@ -70,12 +70,10 @@ dabao-host safe info
 
 ## Limits / next
 
-- **Gap between simulation and inclusion.** The device simulates on the latest block, and
-  state can change before the agent executes. Planned: the device wraps the call in a
-  MultiSend (`MultiSendCallOnly`, delegatecall) that ends with an on-chain postcondition
-  assertion, e.g. "the Safe's balance of X fell by at most what was shown".
-- Only operation CALL; DELEGATECALL Safe transactions (e.g. MultiSend) are refused because the
-  hash is built with operation 0.
+- **Gap between simulation and inclusion: closed** by the on-chain postcondition
+  (docs/postcondition.md). The device co-signs only a DELEGATECALL to MultiSendCallOnly with
+  [the call, `DabaoPostcondition.check(...)`], which reverts the Safe transaction unless the
+  Safe's balances and configuration still match the simulation at inclusion.
 - The agent + recovery keys can execute without the device. That's intended (the human
   override), but it means the recovery key must really be kept offline.
 - The parent header is proven canonical by the light client (docs/light-client.md), the same

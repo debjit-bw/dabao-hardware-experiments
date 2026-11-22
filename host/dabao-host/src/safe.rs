@@ -40,8 +40,15 @@ sol! {
         function nonce() view returns (uint256);
         function getOwners() view returns (address[]);
         function getThreshold() view returns (uint256);
+        function simulateAndRevert(address targetContract, bytes calldataPayload);
         event ExecutionSuccess(bytes32 txHash, uint256 payment);
         event ExecutionFailure(bytes32 txHash, uint256 payment);
+    }
+    interface IPostcondition {
+        function check(address device, uint256 threshold, address[] assets, uint256[] floors);
+    }
+    interface IBalanceOf {
+        function balanceOf(address who) view returns (uint256);
     }
     interface IProxyFactory {
         function createProxyWithNonce(address _singleton, bytes initializer, uint256 saltNonce) returns (address proxy);
@@ -162,6 +169,14 @@ pub struct Args {
     pub broadcast: bool,
     /// Don't ask the device: try to execute with the agent's signature alone (eth_call only).
     pub agent_only: bool,
+    /// Run the device's pipeline (simulation, 7730, policy, postcondition) here on the host
+    /// instead of on the device; nothing is signed. For testing before a flash.
+    pub local: bool,
+    /// A shell command to run after the device co-signed and before the agent executes (demo:
+    /// change the state in between).
+    pub before_exec: Option<String>,
+    /// Execute even if the pre-flight says the postcondition fails (to put the revert on chain).
+    pub force: bool,
 }
 
 /// What an agent without the device can do: sign alone and try to execute (simulated with
@@ -188,6 +203,97 @@ async fn agent_only(p: &impl Provider, s: Address, agent: &PrivateKeySigner, a: 
         Err(e) => println!("agent alone (1 of 2 signatures): the Safe refuses: {e}"),
     }
     Ok(())
+}
+
+/// The device's Safe pipeline, run here: what `verifier::run_as` + `sign_request` do for a Safe,
+/// minus the light client, the counters and the signature. Returns the refusal or the SafeTx data.
+fn local_device(raw: &[u8], input: &SimInput, device: Address) -> Result<std::result::Result<Bytes, String>> {
+    let descriptors = clear_sign::builtin();
+    let pol = policy::builtin();
+    let limited: Vec<Address> =
+        pol.chains.iter().filter(|c| c.chain_id == input.chain_id).flat_map(|c| c.limits.iter().map(|l| l.asset)).collect();
+    let opts = xous_evm::sim::Options {
+        as_contract: true,
+        reads: safe::slots(device).iter().map(|x| (input.tx.from, *x)).collect(),
+        code_hashes: xous_evm::postcondition::CODE_HASH_ACCOUNTS.to_vec(),
+    };
+    let res = xous_evm::sim::simulate_then(raw, |_| {}, &opts, |r, reads, call| {
+        r.clear_sign = clear_sign::check(&descriptors, input.chain_id, &input.tx, r.success, &r.effects);
+        r.policy = policy::evaluate(&pol, &[], &descriptors, input, r).check;
+        let post = r.success.then(|| {
+            xous_evm::postcondition::build(r, &input.tx, device, reads.slots[1], &reads.code_hashes, &limited, call)
+        });
+        post
+    });
+    let (sim, reads, post) = match res {
+        Ok(x) => x,
+        Err(e) => return Ok(Err(format!("simulation rejected the input: {e}"))),
+    };
+    let mut sim = sim;
+    sim.header_check = b"not checked in a --local run".to_vec().into();
+    crate::send::print_sim(&sim, input.chain_id);
+    let st = safe::State::from_slots(&reads.slots.clone().try_into().map_err(|_| anyhow::anyhow!("reads"))?);
+    let mut why: Vec<String> = Vec::new();
+    if !sim.success {
+        why.push("the transaction reverts".into());
+    }
+    if sim.clear_sign.descriptor.is_empty() || !sim.clear_sign.violations.is_empty() {
+        why.push("ERC-7730 check failed".into());
+    }
+    why.extend(sim.policy.violations.iter().map(|v| format!("policy: {}", String::from_utf8_lossy(v))));
+    why.extend(st.problems().into_iter().map(|p| format!("Safe: {p}")));
+    match post {
+        Some(Ok(p)) if why.is_empty() => Ok(Ok(p.safe_data.into())),
+        Some(Err(e)) => {
+            why.push(format!("postcondition: {e}"));
+            Ok(Err(why.join("; ")))
+        }
+        _ => Ok(Err(why.join("; "))),
+    }
+}
+
+/// Print what the device's batch asserts; check its first call is exactly the requested one.
+fn show_batch(safe_data: &[u8], a: &Args, chain_id: u64) -> Result<()> {
+    let calls = safe::multisend_decode(safe_data).context("device's SafeTx data is not a MultiSendCallOnly batch")?;
+    ensure!(calls.len() == 2, "batch has {} calls, expected [call, postcondition]", calls.len());
+    ensure!(
+        calls[0].to == a.to && calls[0].value == a.value && calls[0].data == a.data.as_ref(),
+        "the batch's first call is not the requested call"
+    );
+    ensure!(calls[1].to == safe::POSTCONDITION && calls[1].value.is_zero(), "the batch doesn't end in the postcondition");
+    let c = IPostcondition::checkCall::abi_decode(&calls[1].data).context("decode check(...)")?;
+    println!("postcondition (checked at inclusion, else the whole Safe tx reverts):");
+    println!("  device {} still an owner, threshold {}, no module, no guard", c.device, c.threshold);
+    let tokens = clear_sign::builtin();
+    for (asset, floor) in c.assets.iter().zip(&c.floors) {
+        let name = clear_sign::check::format_amount(&tokens, chain_id, *asset, *floor);
+        println!("  Safe balance >= {name}{}", if asset.is_zero() { String::new() } else { format!(" ({asset})") });
+    }
+    Ok(())
+}
+
+/// Run the batch as the Safe on the latest state (Safe.simulateAndRevert: a DELEGATECALL from the
+/// Safe's context, no signatures needed). Ok(()) = the call and the postcondition both succeed.
+async fn preflight(p: &impl Provider, s: Address, safe_data: &Bytes) -> Result<std::result::Result<(), String>> {
+    let c = ISafe::simulateAndRevertCall { targetContract: safe::MULTISEND_CALL_ONLY, calldataPayload: safe_data.clone() };
+    let tx = TransactionRequest::default().with_to(s).with_input(c.abi_encode());
+    let err = match p.call(tx).await {
+        Ok(_) => bail!("simulateAndRevert did not revert"),
+        Err(e) => e,
+    };
+    let data = err.as_error_resp().and_then(|r| r.as_revert_data()).context("simulateAndRevert: no revert data")?;
+    ensure!(data.len() >= 64, "simulateAndRevert: short revert data");
+    let ok = !U256::from_be_slice(&data[..32]).is_zero();
+    let ret = &data[64..];
+    if ok {
+        return Ok(Ok(()));
+    }
+    // MultiSendCallOnly reverts with no data when a call in the batch fails
+    Ok(Err(if ret.is_empty() {
+        "a call in the batch reverts (MultiSendCallOnly drops the reason): the call or the postcondition".into()
+    } else {
+        xous_evm::postcondition::revert_reason(ret)
+    }))
 }
 
 pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
@@ -231,7 +337,43 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     };
     // the Safe's configuration slots the device checks before co-signing
     al.0.push(AccessListItem { address: s, storage_keys: safe::slots(device).iter().map(|x| B256::from(*x)).collect() });
-    let (state, codes, keys, n_acc, n_slots) = crate::replay::witness_for(p, at, &al, &[s, a.to, ph.beneficiary]).await?;
+    // what the postcondition reads: the Safe's balance of every candidate asset (the policy's
+    // limited assets, and any token the call touches), via the same check(...) with zero floors
+    let threshold = call(p, s, ISafe::getThresholdCall {}, at).await?;
+    let pol = policy::builtin();
+    let mut candidates: Vec<Address> =
+        pol.chains.iter().filter(|c| c.chain_id == chain_id).flat_map(|c| c.limits.iter().map(|l| l.asset)).filter(|x| !x.is_zero()).collect();
+    for item in al.0.iter() {
+        if !candidates.contains(&item.address)
+            && let Ok(b) = p.call(TransactionRequest::default().with_to(item.address).with_input(IBalanceOf::balanceOfCall { who: s }.abi_encode())).block(at).await
+            && b.len() == 32
+        {
+            candidates.push(item.address);
+        }
+    }
+    candidates.insert(0, Address::ZERO);
+    let zeros = vec![U256::ZERO; candidates.len()];
+    // balances(...) reads every asset whatever the Safe's state; check(...) adds the Safe's own
+    // getters (it may revert early, e.g. for an emulator device that isn't an owner)
+    for data in [safe::balances_calldata(s, &candidates), safe::check_calldata(device, threshold, &candidates, &zeros)] {
+        let creq = TransactionRequest::default().with_from(s).with_to(safe::POSTCONDITION).with_input(data);
+        match p.create_access_list(&creq).block_id(at).await {
+            Ok(cal) => {
+                if let Some(e) = &cal.error {
+                    println!("  (node: postcondition call fails on the pre-state: {e}; the device will decide)");
+                }
+                al.0.extend(cal.access_list.0)
+            }
+            Err(e) => println!("  (createAccessList for the postcondition failed: {e})"),
+        }
+    }
+    let (state, codes, keys, n_acc, n_slots) = crate::replay::witness_for(
+        p,
+        at,
+        &al,
+        &[s, a.to, ph.beneficiary, safe::MULTISEND_CALL_ONLY, safe::POSTCONDITION],
+    )
+    .await?;
     let input = SimInput {
         chain_id,
         parent_header: alloy_rlp::encode(&ph).into(),
@@ -246,37 +388,44 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     let bytes = alloy_rlp::encode(&input);
     println!("witness: {n_acc} accounts, {n_slots} slots, {} nodes, {} B", input.state.len(), bytes.len());
 
+    if a.local {
+        println!("LOCAL run of the device's pipeline on this host (no light client, no counters, nothing signed)");
+        return match local_device(&bytes, &input, device)? {
+            Err(why) => {
+                println!("NOT CO-SIGNED: {why}");
+                Ok(())
+            }
+            Ok(safe_data) => {
+                show_batch(&safe_data, &a, chain_id)?;
+                let hash = safe::tx_hash_op(chain_id, s, safe::MULTISEND_CALL_ONLY, U256::ZERO, &safe_data, nonce, 1);
+                let onchain = call(p, s, safe_tx_hash_call(&safe_data, nonce), at).await?;
+                ensure!(onchain == hash, "SafeTx hash mismatch: host {hash}, Safe {onchain}");
+                println!("SafeTx {hash} (== Safe.getTransactionHash, DELEGATECALL to MultiSendCallOnly)");
+                match preflight(p, s, &safe_data).await? {
+                    Ok(()) => println!("pre-flight on the latest block (Safe.simulateAndRevert): call + postcondition succeed"),
+                    Err(e) => println!("pre-flight on the latest block: FAILS: {e}"),
+                }
+                Ok(())
+            }
+        };
+    }
+
     let r = crate::send::safe_sign(&bytes, tcp)?;
     if !r.refused.is_empty() {
         return Ok(());
     }
+    let safe_data = r.safe_data.clone();
+    show_batch(&safe_data, &a, chain_id)?;
 
     // check the device's signature against the SafeTx hash computed here and by the Safe itself
-    let hash = safe::tx_hash(chain_id, s, a.to, a.value, &a.data, nonce);
-    let onchain = call(
-        p,
-        s,
-        ISafe::getTransactionHashCall {
-            to: a.to,
-            value: a.value,
-            data: a.data.clone(),
-            operation: 0,
-            safeTxGas: U256::ZERO,
-            baseGas: U256::ZERO,
-            gasPrice: U256::ZERO,
-            gasToken: Address::ZERO,
-            refundReceiver: Address::ZERO,
-            _nonce: nonce,
-        },
-        at,
-    )
-    .await?;
+    let hash = safe::tx_hash_op(chain_id, s, safe::MULTISEND_CALL_ONLY, U256::ZERO, &safe_data, nonce, 1);
+    let onchain = call(p, s, safe_tx_hash_call(&safe_data, nonce), at).await?;
     ensure!(onchain == hash, "SafeTx hash mismatch: host {hash}, Safe {onchain}");
     ensure!(r.signed_tx.len() == 65, "device signature is {} B, expected 65", r.signed_tx.len());
     let dev_sig = Signature::from_raw(&r.signed_tx).context("device signature")?;
     let recovered = dev_sig.recover_address_from_prehash(&hash).context("recover")?;
     ensure!(recovered == device, "device signature recovers to {recovered}, not {device}");
-    println!("device co-signed SafeTx {hash} (== Safe.getTransactionHash; recovers to the device)");
+    println!("device co-signed SafeTx {hash} (== Safe.getTransactionHash; DELEGATECALL to MultiSendCallOnly; recovers to the device)");
 
     let agent_sig = agent.sign_hash_sync(&hash)?;
     let mut sigs = vec![(device, r.signed_tx.to_vec()), (agent.address(), agent_sig.as_bytes().to_vec())];
@@ -286,12 +435,26 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
         println!("agent signed too: 2 of 3 signatures ready (not executed; add --broadcast)");
         return Ok(());
     }
+    if let Some(cmd) = &a.before_exec {
+        println!("before executing: running `{cmd}`");
+        let st = std::process::Command::new("sh").arg("-c").arg(cmd).status().context("before-exec")?;
+        ensure!(st.success(), "before-exec command failed: {st}");
+    }
+    let pre = preflight(p, s, &safe_data).await?;
+    match &pre {
+        Ok(()) => println!("pre-flight on the latest block: call + postcondition succeed"),
+        Err(e) if a.force => println!("pre-flight on the latest block: FAILS: {e}\n  --force: executing anyway, to show the revert on chain"),
+        Err(e) => {
+            println!("pre-flight on the latest block: FAILS: {e}\nNOT EXECUTED: the postcondition would revert the Safe tx (pass --force to put the revert on chain)");
+            return Ok(());
+        }
+    }
 
     let exec = ISafe::execTransactionCall {
-        to: a.to,
-        value: a.value,
-        data: a.data,
-        operation: 0,
+        to: safe::MULTISEND_CALL_ONLY,
+        value: U256::ZERO,
+        data: safe_data.clone(),
+        operation: 1,
         safeTxGas: U256::ZERO,
         baseGas: U256::ZERO,
         gasPrice: U256::ZERO,
@@ -300,7 +463,10 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
         signatures,
     };
     let w = ProviderBuilder::new().wallet(EthereumWallet::from(agent.clone())).connect_http(url()?);
-    let tx = TransactionRequest::default().with_from(agent.address()).with_to(s).with_input(exec.abi_encode());
+    let mut tx = TransactionRequest::default().with_from(agent.address()).with_to(s).with_input(exec.abi_encode());
+    if pre.is_err() {
+        tx = tx.with_gas_limit(400_000); // the node can't estimate a reverting tx
+    }
     let pending = w.send_transaction(tx).await.context("execTransaction")?;
     let h = *pending.tx_hash();
     println!("agent executes: {h}\n  https://sepolia.etherscan.io/tx/{h}");
@@ -310,7 +476,8 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     // the inner call's logs = everything not emitted by the Safe itself
     let chain_logs: Vec<(Address, Vec<B256>, Bytes)> =
         logs.iter().filter(|l| l.address() != s).map(|l| (l.address(), l.topics().to_vec(), l.data().data.clone())).collect();
-    let dev_logs: Vec<(Address, Vec<B256>, Bytes)> = r.sim.logs.iter().map(|l| (l.address, l.topics.clone(), l.data.clone())).collect();
+    let dev_logs: Vec<(Address, Vec<B256>, Bytes)> =
+        r.sim.logs.iter().filter(|l| l.address != s).map(|l| (l.address, l.topics.clone(), l.data.clone())).collect();
     println!(
         "included in block {:?}: tx status {}, Safe {} (device predicted success {}); inner-call logs {}",
         receipt.block_number,
@@ -320,4 +487,19 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
         if chain_logs == dev_logs { format!("IDENTICAL to the device's prediction ({})", dev_logs.len()) } else { format!("DIFFER (chain {}, device {})", chain_logs.len(), dev_logs.len()) }
     );
     Ok(())
+}
+
+fn safe_tx_hash_call(safe_data: &Bytes, nonce: U256) -> ISafe::getTransactionHashCall {
+    ISafe::getTransactionHashCall {
+        to: safe::MULTISEND_CALL_ONLY,
+        value: U256::ZERO,
+        data: safe_data.clone(),
+        operation: 1,
+        safeTxGas: U256::ZERO,
+        baseGas: U256::ZERO,
+        gasPrice: U256::ZERO,
+        gasToken: Address::ZERO,
+        refundReceiver: Address::ZERO,
+        _nonce: nonce,
+    }
 }

@@ -318,7 +318,12 @@ pub struct SignJob {
 
 impl SignJob {
     pub const TX: u8 = 0;
+    /// A Safe transaction with operation CALL (no longer issued by the verifier).
     pub const SAFE: u8 = 1;
+    /// A Safe transaction with operation DELEGATECALL to [`safe::MULTISEND_CALL_ONLY`]: the
+    /// simulated call followed by the on-chain postcondition. The signer refuses any other
+    /// DELEGATECALL target.
+    pub const SAFE_MULTISEND: u8 = 2;
 }
 
 /// Safe (v1.4.1) co-signing: storage layout and the SafeTx EIP-712 hash, shared by the verifier
@@ -425,6 +430,11 @@ pub mod safe {
     /// The EIP-712 SafeTx hash owners sign: operation CALL, safeTxGas = baseGas = gasPrice = 0,
     /// gasToken = refundReceiver = 0 (no gas refunds paid from the Safe).
     pub fn tx_hash(chain_id: u64, safe: Address, to: Address, value: U256, data: &[u8], nonce: U256) -> B256 {
+        tx_hash_op(chain_id, safe, to, value, data, nonce, 0)
+    }
+
+    /// [`tx_hash`] with an explicit operation (0 CALL, 1 DELEGATECALL).
+    pub fn tx_hash_op(chain_id: u64, safe: Address, to: Address, value: U256, data: &[u8], nonce: U256, operation: u8) -> B256 {
         let mut d = alloc::vec::Vec::with_capacity(96);
         d.extend_from_slice(DOMAIN_TYPEHASH.as_slice());
         d.extend_from_slice(&U256::from(chain_id).to_be_bytes::<32>());
@@ -435,7 +445,7 @@ pub mod safe {
         s.extend_from_slice(&word_addr(to));
         s.extend_from_slice(&value.to_be_bytes::<32>());
         s.extend_from_slice(keccak256(data).as_slice());
-        s.extend_from_slice(&[0u8; 32]); // operation CALL
+        s.extend_from_slice(&U256::from(operation).to_be_bytes::<32>());
         s.extend_from_slice(&[0u8; 32 * 3]); // safeTxGas, baseGas, gasPrice
         s.extend_from_slice(&[0u8; 32 * 2]); // gasToken, refundReceiver
         s.extend_from_slice(&nonce.to_be_bytes::<32>());
@@ -445,6 +455,117 @@ pub mod safe {
         m.extend_from_slice(domain.as_slice());
         m.extend_from_slice(st.as_slice());
         keccak256(&m)
+    }
+
+    /// Safe's MultiSendCallOnly 1.4.1 (canonical; same code hash on mainnet and Sepolia). Its
+    /// batch may contain only CALLs, so DELEGATECALLing it can't run arbitrary code as the Safe.
+    pub const MULTISEND_CALL_ONLY: Address = address!("0x9641d764fc13c8B624c04430C7356C1C7C8102e2");
+    pub const MULTISEND_CALL_ONLY_CODEHASH: B256 = b256!("0xecd5bd14a08c5d2122379900b2f272bdf107a7e92423c10dd5fe3254386c9939");
+    /// `contracts/src/DabaoPostcondition.sol`, deployed with the deterministic CREATE2 deployer
+    /// (salt 0), so this address commits to its init code. The code hash is checked too: a call
+    /// to an address without code succeeds, which would make the postcondition a no-op.
+    pub const POSTCONDITION: Address = address!("0xf864caDe5938aB798D69e07002445C7A068b310F");
+    pub const POSTCONDITION_CODEHASH: B256 = b256!("0x4b87d3230344be20c0d96d9491afeb98edd7139e2b6ab10284d54657088dbbf9");
+
+    fn push_word(v: &mut alloc::vec::Vec<u8>, w: U256) {
+        v.extend_from_slice(&w.to_be_bytes::<32>());
+    }
+
+    fn push_addr(v: &mut alloc::vec::Vec<u8>, a: Address) {
+        v.extend_from_slice(&word_addr(a));
+    }
+
+    fn push_array<T: Copy>(v: &mut alloc::vec::Vec<u8>, xs: &[T], w: impl Fn(&mut alloc::vec::Vec<u8>, T)) {
+        push_word(v, U256::from(xs.len()));
+        for x in xs {
+            w(v, *x);
+        }
+    }
+
+    /// `DabaoPostcondition.balances(who, assets)` calldata.
+    pub fn balances_calldata(who: Address, assets: &[Address]) -> alloc::vec::Vec<u8> {
+        let mut v = alloc::vec![0xd3, 0xe5, 0xca, 0x87];
+        push_addr(&mut v, who);
+        push_word(&mut v, U256::from(64));
+        push_array(&mut v, assets, push_addr);
+        v
+    }
+
+    /// `DabaoPostcondition.check(device, threshold, assets, floors)` calldata.
+    pub fn check_calldata(device: Address, threshold: U256, assets: &[Address], floors: &[U256]) -> alloc::vec::Vec<u8> {
+        let mut v = alloc::vec![0xdc, 0xcb, 0x59, 0x2e];
+        push_addr(&mut v, device);
+        push_word(&mut v, threshold);
+        push_word(&mut v, U256::from(128));
+        push_word(&mut v, U256::from(128 + 32 + 32 * assets.len()));
+        push_array(&mut v, assets, push_addr);
+        push_array(&mut v, floors, push_word);
+        v
+    }
+
+    /// Decode an ABI `uint256[]` return value (strict: canonical offset and exact length).
+    pub fn decode_uint_array(out: &[u8]) -> Option<alloc::vec::Vec<U256>> {
+        let word = |i: usize| out.get(i * 32..i * 32 + 32).map(|w| U256::from_be_slice(w));
+        if word(0)? != U256::from(32) {
+            return None;
+        }
+        let n: usize = word(1)?.try_into().ok()?;
+        if out.len() != 64 + 32 * n {
+            return None;
+        }
+        (0..n).map(|i| word(2 + i)).collect()
+    }
+
+    /// One call in a MultiSend batch.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Call {
+        pub to: Address,
+        pub value: U256,
+        pub data: alloc::vec::Vec<u8>,
+    }
+
+    /// `multiSend(bytes transactions)` calldata: each call packed as
+    /// `operation (1) || to (20) || value (32) || data length (32) || data`, all operation CALL.
+    pub fn multisend_calldata(calls: &[Call]) -> alloc::vec::Vec<u8> {
+        let mut packed = alloc::vec::Vec::new();
+        for c in calls {
+            packed.push(0);
+            packed.extend_from_slice(c.to.as_slice());
+            push_word(&mut packed, c.value);
+            push_word(&mut packed, U256::from(c.data.len()));
+            packed.extend_from_slice(&c.data);
+        }
+        let mut v = alloc::vec![0x8d, 0x80, 0xff, 0x0a];
+        push_word(&mut v, U256::from(32));
+        push_word(&mut v, U256::from(packed.len()));
+        packed.resize(packed.len().div_ceil(32) * 32, 0); // ABI pads `bytes` to 32
+        v.extend_from_slice(&packed);
+        v
+    }
+
+    /// Inverse of [`multisend_calldata`] (None if not exactly that shape, or any op isn't CALL).
+    pub fn multisend_decode(d: &[u8]) -> Option<alloc::vec::Vec<Call>> {
+        if d.get(..4)? != [0x8d, 0x80, 0xff, 0x0a] || U256::from_be_slice(d.get(4..36)?) != U256::from(32) {
+            return None;
+        }
+        let n: usize = U256::from_be_slice(d.get(36..68)?).try_into().ok()?;
+        let mut p = d.get(68..68 + n)?;
+        if d.len() != 68 + n.div_ceil(32) * 32 {
+            return None;
+        }
+        let mut calls = alloc::vec::Vec::new();
+        while !p.is_empty() {
+            if p.len() < 85 || p[0] != 0 {
+                return None;
+            }
+            let to = Address::from_slice(&p[1..21]);
+            let value = U256::from_be_slice(&p[21..53]);
+            let len: usize = U256::from_be_slice(&p[53..85]).try_into().ok()?;
+            let data = p.get(85..85 + len)?.to_vec();
+            calls.push(Call { to, value, data });
+            p = &p[85 + len..];
+        }
+        Some(calls)
     }
 }
 
@@ -458,6 +579,10 @@ pub struct SignResult {
     pub signed_tx: Bytes,
     /// This device's signing address.
     pub signer: Address,
+    /// Safe co-signing: the `data` of the SafeTx the device signed (to
+    /// [`safe::MULTISEND_CALL_ONLY`], operation DELEGATECALL, value 0): the simulated call, then
+    /// the postcondition. The executor must submit exactly this.
+    pub safe_data: Bytes,
 }
 
 /// Reply to `wire::TYPE_STATUS`: the verifier's memory budget.

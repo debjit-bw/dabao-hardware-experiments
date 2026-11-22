@@ -34,8 +34,19 @@ fn sign(key: &SigningKey, me: Address, job: &SignJob) -> Result<Vec<u8>, String>
         Ok(Signature::from_scalars_and_parity(B256::from_slice(&r), B256::from_slice(&s), recid.is_y_odd()))
     };
     if job.kind == SignJob::SAFE {
-        // co-sign a Safe transaction: the SafeTx hash, computed here from the approved fields
-        let hash = sim_types::safe::tx_hash(job.chain_id, t.from, t.to, t.value, &t.data, job.safe_nonce);
+        return Err("Safe calls are co-signed only wrapped in the postcondition (SAFE_MULTISEND)".into());
+    }
+    if job.kind == SignJob::SAFE_MULTISEND {
+        // co-sign a Safe transaction: the SafeTx hash, computed here from the approved fields.
+        // DELEGATECALL runs code as the Safe, so only to the pinned MultiSendCallOnly, with a
+        // batch of CALLs that ends in the postcondition.
+        use sim_types::safe;
+        let calls = safe::multisend_decode(&t.data).ok_or("not a MultiSendCallOnly batch of CALLs")?;
+        let ends_in_check = calls.last().is_some_and(|c| c.to == safe::POSTCONDITION && c.value.is_zero());
+        if t.to != safe::MULTISEND_CALL_ONLY || !t.value.is_zero() || calls.len() != 2 || !ends_in_check {
+            return Err("DELEGATECALL only to MultiSendCallOnly: [call, postcondition]".into());
+        }
+        let hash = safe::tx_hash_op(job.chain_id, t.from, t.to, t.value, &t.data, job.safe_nonce, 1);
         let sig = sign_hash(hash)?;
         let mut out = sig.r().to_be_bytes::<32>().to_vec();
         out.extend_from_slice(&sig.s().to_be_bytes::<32>());
@@ -110,7 +121,7 @@ fn main() -> ! {
         let reply = match alloy_rlp::Decodable::decode(&mut &job_bytes[..]) {
             Ok(job) => match sign(&key, me, &job) {
                 Ok(raw) => {
-                    if job.kind == SignJob::SAFE {
+                    if job.kind == SignJob::SAFE_MULTISEND {
                         log::info!("co-signed Safe {} nonce {} to {}", job.tx.from, job.safe_nonce, job.tx.to);
                     } else {
                         log::info!("signed nonce {} to {} ({} B)", job.tx.nonce, job.tx.to, raw.len());
