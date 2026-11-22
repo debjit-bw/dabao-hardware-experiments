@@ -68,8 +68,8 @@ that, and `NET_GAIN`/`NET_LOSS` give the "you pay X, you get Y" view a 7730 swap
   metadata.
 - **No call tree yet**: delegatecalls into unknown code, and value sent by internal calls, are
   only visible through their storage / balance effects.
-- **No code changes yet**: EIP-7702 delegations and `selfdestruct` aren't reported (the legacy
-  transactions we sign can't carry 7702 authorizations).
+- **No code changes yet**: EIP-7702 delegations and `selfdestruct` aren't reported (the legacy and
+  EIP-1559 transactions we sign can't carry 7702 authorizations).
 - Uniswap **v4** (singleton PoolManager, flash accounting) and ERC-1155 batch transfers are
   outside the subset: they show up as `UNEXPLAINED_STORAGE`.
 

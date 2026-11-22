@@ -24,8 +24,8 @@ device, and the agent's key alone is 1 of 2 signatures.
 
 ```
 cargo build -p dabao-host -p bao-mcp
-claude mcp add dabao-wallet -- $PWD/target/debug/bao-mcp       # or demo/agent/mcp.json
-scripts/mcp-call.py [tool '{json args}']                        # minimal scripted client
+claude mcp add dabao-wallet -- $PWD/target/debug/bao-mcp
+scripts/mcp-call.py [tool '{json args}']
 ```
 
 Environment: `BAO_MCP_CHAIN` (default sepolia), `BAO_MCP_DRY_RUN=1` (co-sign, don't execute),

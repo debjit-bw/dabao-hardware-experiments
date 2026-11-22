@@ -12,6 +12,7 @@ file does, and how to build, run and change it. You don't need to know Xous or m
 | find your way around the code | parts 7 and 8 |
 | build, run or test it | parts 9 to 11 |
 | change it | part 12 |
+| look up any command | [part 15](#15-command-reference) |
 | fix something that broke | part 13 |
 
 Part 6 lists the known security holes. Read it before you trust the board with anything.
@@ -34,6 +35,7 @@ Part 6 lists the known security holes. Read it before you trust the board with a
 12. [How to change things](#12-how-to-change-things)
 13. [When something goes wrong](#13-when-something-goes-wrong)
 14. [A good order to read the code in](#14-a-good-order-to-read-the-code-in)
+15. [Command reference](#15-command-reference)
 
 ---
 
@@ -191,7 +193,7 @@ slots at boot, before any host byte is read.
 
 | Image | Contains | Flash it after changing |
 |---|---|---|
-| `loader.uf2` | Xous loader | rarely needed |
+| `loader.uf2` | Xous loader | on a board's first flash, then only if xous-core's loader changes |
 | `xous.uf2`, the system image | kernel, Xous services, **verifier** | verifier, policy, descriptors, light client, EVM, keystore |
 | `apps.uf2`, the apps image | **transport**, **signer** | transport, signer |
 
@@ -436,12 +438,20 @@ neither moved nor have a limit. It also reverts exact-output swaps that cost sli
 than simulated. And Safe swaps don't fit on the board yet: about 158 KB of witness against a
 140 KiB limit.
 
+**R. The board's signatures don't expire.** A transaction signed for the board's own account
+but never sent stays valid until that nonce is used. Signing without `--broadcast` creates
+exactly that. To cancel one, send another transaction with the same nonce.
+
 **O. A Safe is recognised by storage alone.** Any contract can copy that layout. Such a
 signature is useless on a real Safe, but it uses up the daily budget. A hostile host can use
 up the budget anyway by requesting signatures it never sends.
 
 **P. The MCP server reads text.** It decides the status from the host's printed output, so
 rewording a message can change what the agent is told.
+
+**S. Accounts with EIP-7702 delegation don't work.** The host doesn't fetch the delegate
+account's proof or code, so the simulation stops with `MPT: unresolved node access`.
+Reproduced with `build --replay`. `send-tx` builds its witness the same way. It fails closed.
 
 **Q. A crash wedges the board.** If the verifier runs out of memory or panics, you must press
 reset.
@@ -782,9 +792,11 @@ cd dabao-hardware-experiments
 rustup default 1.100.0
 (cd vendor/xous-core && cargo xtask install-toolkit)
 
-cargo build --locked -p dabao-host -p bao-mcp     # computer side
-scripts/build-device.sh                           # board firmware
+cargo build --locked -p dabao-host -p bao-mcp
+scripts/build-device.sh
 ```
+
+The first builds the computer side, the second the board's firmware.
 
 Expect 5 to 20 minutes the first time, depending mostly on the network. `rustup default`
 changes your machine's default Rust. Image sizes vary by a few KB with the checkout path,
@@ -817,13 +829,34 @@ scripts/board-audit.py
 
 ### Flash
 
+Run the script, then press reset. It finds boot1, flashes and boots.
+
+**A board's first flash needs all three images:**
+
 ```sh
 R=vendor/xous-core/target/riscv32imac-unknown-xous-elf/release
+scripts/flash-and-log.py $R/loader.uf2 $R/xous.uf2 $R/apps.uf2
+```
+
+After that, two are enough:
+
+```sh
 scripts/flash-and-log.py $R/xous.uf2 $R/apps.uf2
 ```
 
-Then press reset. The script finds boot1, flashes and boots. On macOS don't drag the files
-onto the BAOCHIP drive: the big one hangs.
+On macOS don't drag the files onto the BAOCHIP drive: the big one hangs. After flashing,
+check `dabao-host policy` shows the policy you expect **before any signing request**. An old
+image signs by old rules.
+
+### If it's your own board
+
+This repo's addresses belong to its authors' board and test accounts. On yours:
+
+- the board makes its own key on first boot. `dabao-host address` prints it; fund it on Sepolia;
+- run `safe keys`, fund the agent, then `safe create`, to get your own Safe;
+- the postcondition demo only works for the owner of the deployed DemoPayRouter. Deploy your
+  own and update the descriptor, the policy and the two demo scripts;
+- the contract fork tests use the authors' Safe.
 
 ---
 
@@ -837,19 +870,26 @@ H=target/debug/dabao-host
 ```
 
 `--chain sepolia` picks a free Sepolia RPC. **Without it the default RPC is mainnet.**
-Amounts given to `dabao-host` are in wei.
+Amounts given to `dabao-host` are in wei. If `RPC_URL` is set it wins, and `--chain` is ignored.
+
+Code blocks here have no `#` comments on purpose: macOS's zsh passes them to the program as
+arguments. [Part 15](#15-command-reference) lists every command.
 
 ### After plugging in
 
-A reset leaves the board in boot1. Open its serial port (`screen /dev/cu.usbmodem<serial>1`)
-and type `boot`. Then:
+A reset leaves the board in boot1. Open its serial port with
+`screen /dev/cu.usbmodem<serial>1`, type `boot` and press Enter. (To leave `screen`: Ctrl-A,
+then K, then Y.) Then:
 
 ```sh
-$H status        # memory limits and the signer's address
-$H address       # the board's account
-$H policy        # rules and today's spending
-$H lc-sync       # load the committee and catch up
+$H status
+$H address
+$H policy
+$H lc-sync
 ```
+
+In order: memory limits and signer, the board's account, rules and today's spending, then
+loading the committee and catching up.
 
 ### Send from the board's account
 
@@ -862,6 +902,9 @@ This signs but does not send. It still uses up daily budget. Add `--broadcast` t
 
 ### A swap
 
+Fund the board's account first. The script gets its quote by simulating the swap from that
+account, so the quote fails if the account doesn't hold the ETH.
+
 ```sh
 DATA=$(scripts/uniswap-calldata.py $($H address) 10000000000)
 $H send-tx --chain sepolia --to 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E \
@@ -871,12 +914,14 @@ $H send-tx --chain sepolia --to 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E \
 ### The Safe
 
 ```sh
-$H safe keys --chain sepolia                     # create or show agent and recovery keys
-$H safe create --chain sepolia                   # deploy a Safe (fund the agent first)
+$H safe keys --chain sepolia
+$H safe create --chain sepolia
 $H safe info --chain sepolia
 $H safe fund --chain sepolia --value 1000000000000000
 $H safe send --chain sepolia --to ADDR --value WEI [--data 0x..]
 ```
+
+`create` needs a funded agent. `create` and `fund` send at once: they have no `--broadcast`.
 
 Options for `safe send`:
 
@@ -891,8 +936,8 @@ Options for `safe send`:
 ### The agent wallet
 
 ```sh
-claude mcp add dabao-wallet -- $PWD/target/debug/bao-mcp   # use it from Claude Code
-scripts/mcp-call.py                                        # list the tools
+claude mcp add dabao-wallet -- $PWD/target/debug/bao-mcp
+scripts/mcp-call.py
 scripts/mcp-call.py wallet_info
 scripts/mcp-call.py propose_tx \
   '{"to":"0x000000000000000000000000000000000000dEaD","value_eth":"0.0001","reason":"test"}'
@@ -904,11 +949,14 @@ access on this computer can read both Safe keys, so don't rely on this setup for
 ### The demos
 
 ```sh
-demo/agent/run.sh                  # honest agent, two invoices. Sends 0.0001 ETH.
-demo/agent/compromised.sh          # fooled agent, then stolen agent key
-demo/postcondition/run.sh honest   # normal router payment
-demo/postcondition/run.sh          # router changes its mind: reverts on chain
+demo/agent/run.sh
+demo/agent/compromised.sh
+demo/postcondition/run.sh honest
+demo/postcondition/run.sh
 ```
+
+In order: an honest agent with two invoices (sends 0.0001 ETH), a fooled agent and then a
+stolen agent key, a normal router payment, and a router that changes its mind (reverts on chain).
 
 The postcondition demo needs the original router owner's key. Its failing case publishes
 signatures that work for up to 10 minutes. Before running the honest case afterwards, wait a
@@ -917,8 +965,14 @@ minute, so that the light client has seen the router switch back (until then it 
 ### Without a board: the emulator
 
 ```sh
-scripts/run-emu.sh                                        # terminal 1
-$H status --tcp 127.0.0.1:7610                            # terminal 2
+scripts/run-emu.sh
+```
+
+Leave it running. In a second terminal, in the repo:
+
+```sh
+H=target/debug/dabao-host
+$H status --tcp 127.0.0.1:7610
 $H lc-sync --tcp 127.0.0.1:7610
 $H send crates/xous-evm/fixtures/sepolia-swap.rlp --tcp 127.0.0.1:7610
 ```
@@ -926,43 +980,7 @@ $H send crates/xous-evm/fixtures/sepolia-swap.rlp --tcp 127.0.0.1:7610
 Add `--tcp` to any command to use the emulator. It has its own throwaway key, so it is not an
 owner of the demo Safe. It doesn't enforce the board's memory limits.
 
-### Lower-level commands
-
-| Command | Does |
-|---|---|
-| `build <out.rlp>` | A sample mainnet WETH transfer request. |
-| `build <out.rlp> --replay HASH` | Rebuild a real transaction. Needs an RPC with older proofs. |
-| `build <out.rlp> --find-swap` | Find a recent swap and rebuild it. |
-| `build-synthetic <from> <out.rlp>` | A fake-state request. Takes `--eip1559` or `--data 0x..`. |
-| `send <in.rlp>` | Simulate a saved request. `--no-precheck` skips the size check. |
-| `sign <in.rlp>` | Ask to sign a saved request. Refused unless it carries a fresh proof. |
-| `compile-descriptors`, `compile-policy` | Used by `scripts/compile-descriptors.sh`. |
-| `lc-anchor` | Generate a new anchor. |
-| `lc-fixture <out>`, `lc-fixtures <dir>` | Record light-client test data. |
-
-### Environment variables
-
-| Variable | Used by | Meaning |
-|---|---|---|
-| `RPC_URL` | host, scripts | Ethereum node. May hold an API key, so never commit it. |
-| `BEACON_URL` | host | Beacon node with light-client data (default: Lodestar Sepolia). |
-| `BEACON_URL_2` | `lc-anchor` | Second node to cross-check against. |
-| `DABAO_KEYS` | host | Key folder (default `.dabao-keys/`). |
-| `DABAO_VERBOSE` | host | Also print raw logs and storage changes. |
-| `DABAO_DUMP` | host | Save the raw reply to this path. |
-| `DABAO_NO_LC` | host | Test: send no proof. The board must refuse. |
-| `DABAO_LC_REPLAY` | host | Test: send an old proof from this file. The board must refuse. |
-| `DABAO_HOST` | `bao-mcp` | Path to `dabao-host`. |
-| `BAO_MCP_CHAIN` | `bao-mcp` | Default `sepolia`. |
-| `BAO_MCP_DRY_RUN` | `bao-mcp` | Co-sign but don't execute. |
-| `MODEL` | agent demo | `sonnet` (default) or `haiku`. |
-| `DABAO_PORT` | emulator | TCP port (default 7610). |
-| `DABAO_SIGNER_KEY` | emulator | Key file. |
-| `DABAO_SLOTS_DIR` | emulator | Folder for fake slots. |
-| `DABAO_XOUS_CORE` | scripts | A different xous-core checkout. (A plain `XOUS_CORE` is ignored on purpose.) |
-| `SERVICE` | build script | Program for the system image (default `verifier`). |
-| `GENERIC_HID` | build script | `0` gives a USB console instead of the HID transport. |
-| `PYTHON` | flash script | Python that has pyserial. |
+Every other command, and the environment variables: [part 15](#15-command-reference).
 
 ---
 
@@ -1067,7 +1085,8 @@ If it is refused as "unexplained effect", it emits an event the board doesn't kn
 1. `cargo run -p dabao-host -- lc-anchor`
 2. `cargo run -p dabao-host -- lc-fixtures crates/light-client/fixtures`
 3. Update the file names and periods in `crates/light-client/tests/protocol.rs`.
-4. Build and flash `xous.uf2`. A saved period newer than the anchor is kept.
+4. Run the tests. Between steps 1 and 3 they fail, which is expected.
+5. Build and flash `xous.uf2`. A saved period newer than the anchor is kept.
 
 ### Follow an Ethereum upgrade
 
@@ -1131,8 +1150,15 @@ alone is unsafe.
 | `Dabao: expired` | Over 10 minutes between signing and executing. | Sign again. |
 | `daily limit` | Budget used, possibly by unsent signatures. | Wait for the next UTC day. |
 | `policy counters unreadable` | A slot claim or read failed. | Reboot. Check that the image has the keystore change. |
+| `SemVer::from_git: no major version` | xous-core has no version tags and isn't at the pinned commit. | Fetch upstream's tags (the build script prints the command), or check out the pin. |
+| `nonce too low`, or `GS026` when executing | The light client trails the head, so it still saw the previous nonce. | Wait a minute and sign again. |
+| `zsh: parse error near '#'`, or odd `unknown option` errors | A pasted `#` comment became arguments. | Leave the comment out, or `setopt interactive_comments`. |
+| `--chain` seems ignored | `RPC_URL` is set. | `unset RPC_URL`. |
+| `historical state ... is not available` | The RPC can't serve proofs that old. | Use a node with a wider window. |
 | `signer attached` never happens | The slot claim failed, or the key is unreadable. | Read the console or DUART log. Don't erase the slots. |
-| `MPT: unresolved node access` or `not in witness` | The witness lacks data the run needed. | Rebuild it on the same block. |
+| `MPT: unresolved node access` or `not in witness` | The witness lacks data the run needed, or an account involved has EIP-7702 delegation (hole S). | Rebuild it on the same block. Delegated accounts aren't supported. |
+| `quote failed` | The `<from>` account lacks the ETH, or the pool can't fill the swap. | Fund it, or use another amount. |
+| `exceeds maximum proof window` | The public node moved on, or keeps recent state only. | Run it again. For older transactions set `RPC_URL`. |
 | RPC refuses old proofs | The public node keeps recent state only. | Set `RPC_URL` to a node with a wider window. |
 | `GS020` | Too few signatures. | Expected for agent-only. |
 | `GS013` or pre-flight fails | A call in the batch failed, often the postcondition. | The state changed or the deadline passed. Sign again. |
@@ -1159,3 +1185,372 @@ About two hours:
 8. `crates/light-client/src/lib.rs`: `verify_header_proof`, then follow it down.
 9. `crates/xous-evm/src/postcondition.rs` with `contracts/src/DabaoPostcondition.sol`.
 10. `host/dabao-host/src/tx.rs`: the whole trip, seen from the computer.
+
+---
+
+## 15. Command reference
+
+Every command in the repo, with options and examples. Run everything from the repo root.
+
+**What a command can do is marked like this:**
+
+| Mark | Meaning |
+|---|---|
+| read | changes nothing that matters |
+| file | writes local files |
+| board | changes state on the board (loaded keys, saved period) |
+| **sign** | can produce a signature, and uses daily budget when it does |
+| **send** | puts a transaction on chain |
+| **flash** | changes the firmware |
+
+The examples use these variables:
+
+```sh
+H=target/debug/dabao-host
+DEAD=0x000000000000000000000000000000000000dEaD
+WETH=0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14
+ROUTER=0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E
+```
+
+### 15.1 All commands at a glance
+
+| Command | Mark | Needs | Does |
+|---|---|---|---|
+| `status` | read | board | memory limits, signer address |
+| `address` | read | board | the board's account |
+| `policy` | read | board | rules and spending counters |
+| `lc-sync` | board | board, beacon node | load the committee, follow hand-overs |
+| `send` | read | board | simulate a saved request |
+| `sign` | **sign** | board | ask to sign a saved request |
+| `send-tx` | **sign**, **send** with `--broadcast` | board, RPC, beacon node | a transaction from the board's account |
+| `safe keys` | file | nothing | create or show agent and recovery keys |
+| `safe create` | **send** | board, RPC, funded agent | deploy the 2-of-3 Safe |
+| `safe info` | read | RPC | owners, threshold, nonce, balance |
+| `safe fund` | **send** | RPC, funded agent | agent sends ETH to the Safe |
+| `safe send` | **sign**, **send** with `--broadcast` | board, RPC, beacon node | a co-signed Safe transaction |
+| `build` | file | RPC | build a request from live or mined transactions |
+| `build-synthetic` | file | nothing | build a fake-state request |
+| `compile-descriptors` | file | nothing | ERC-7730 JSON to the firmware blob |
+| `compile-policy` | file | nothing | policy JSON to the firmware blob |
+| `lc-anchor` | file | two beacon nodes | regenerate the trust anchor |
+| `lc-fixture` | file | beacon node | record one signature for tests |
+| `lc-fixtures` | file | beacon node | record the protocol test data |
+
+All of these are subcommands of `dabao-host`.
+
+### 15.2 Options that work on any `dabao-host` command
+
+| Option | Meaning |
+|---|---|
+| `--tcp HOST:PORT` | talk to the emulator instead of the board over USB |
+| `--chain sepolia` | use a public Sepolia RPC |
+| `--chain mainnet` | use a public mainnet RPC (this is also the default) |
+
+`RPC_URL`, if set, overrides `--chain`. Amounts are wei, in decimal or `0x` hex.
+
+**A refusal still exits with status 0.** In a script, look for `NOT SIGNED`, `NOT CO-SIGNED`
+or `REJECTED` in the output instead of trusting the exit status.
+
+### 15.3 Looking at the board
+
+```sh
+$H status
+$H address
+$H policy
+$H lc-sync
+$H status --tcp 127.0.0.1:7610
+```
+
+### 15.4 Simulating and signing saved requests
+
+| Form | Does |
+|---|---|
+| `send <in.rlp>` | simulate, print effects and every verdict |
+| `send <in.rlp> --no-precheck` | skip the host's size check, to test that the board refuses |
+| `sign <in.rlp>` | sign if every check passes. A saved request needs a still-fresh proof, so normally this is refused |
+
+```sh
+$H send crates/xous-evm/fixtures/sepolia-swap.rlp
+$H send crates/xous-evm/fixtures/sepolia-swap.rlp --no-precheck
+DABAO_VERBOSE=1 $H send crates/xous-evm/fixtures/sepolia-eth-send.rlp
+$H sign crates/xous-evm/fixtures/sepolia-eth-send.rlp
+```
+
+### 15.5 `send-tx`: from the board's own account
+
+| Option | Meaning |
+|---|---|
+| `--to ADDR` | required |
+| `--value WEI` | default 0 |
+| `--data 0x..` | calldata, default empty |
+| `--legacy` | old-style gas price instead of EIP-1559 |
+| `--broadcast` | send it, wait, compare with the board's prediction |
+
+Without `--broadcast` it still signs: the budget is used and the signature stays valid until
+that nonce is used (hole R).
+
+A plain send, an old-style send, a wrap, and a swap with 1% slippage. All four need a funded
+board account, and the swap's quote fails without one:
+
+```sh
+$H send-tx --chain sepolia --to $DEAD --value 1000000000000
+$H send-tx --chain sepolia --to $DEAD --value 1 --legacy
+$H send-tx --chain sepolia --to $WETH --value 1000000000000 --data 0xd0e30db0
+DATA=$(scripts/uniswap-calldata.py $($H address) 10000000000)
+$H send-tx --chain sepolia --to $ROUTER --value 10000000000 --data $DATA
+```
+
+Really sending:
+
+```sh
+$H send-tx --chain sepolia --to $DEAD --value 1000000000000 --broadcast
+```
+
+### 15.6 `safe`: the shared wallet
+
+| Subcommand | Options | Notes |
+|---|---|---|
+| `safe keys` | none | writes `.dabao-keys/agent.key` and `recovery.key` if missing |
+| `safe create` | none | one Safe per owner set. Refuses if one is saved. Sends at once |
+| `safe info` | none | |
+| `safe fund` | `--value WEI` | sends at once |
+| `safe send` | see below | |
+
+| `safe send` option | Meaning |
+|---|---|
+| `--to ADDR` | required |
+| `--value WEI` | default 0 |
+| `--data 0x..` | calldata |
+| `--broadcast` | the agent executes after the board co-signs |
+| `--local` | run the board's checks on the computer. Signs nothing. Still asks the board for its address and syncs its light client |
+| `--agent-only` | show the Safe refusing the agent's signature alone. Sends nothing |
+| `--before-exec CMD` | with `--broadcast`: run a shell command between signing and executing |
+| `--force` | with `--broadcast`: execute even if the pre-flight fails. Publishes the signatures, valid for up to 10 minutes |
+
+```sh
+$H safe keys
+$H safe info --chain sepolia
+$H safe send --chain sepolia --to $DEAD --value 100000000000000 --local
+$H safe send --chain sepolia --to $DEAD --value 100000000000000 --agent-only
+$H safe send --chain sepolia --to $DEAD --value 100000000000000
+```
+
+These send at once:
+
+```sh
+$H safe create --chain sepolia
+$H safe fund --chain sepolia --value 1000000000000000
+$H safe send --chain sepolia --to $DEAD --value 100000000000000 --broadcast
+```
+
+### 15.7 Building requests
+
+| Form | Does |
+|---|---|
+| `build <out.rlp>` | a WETH transfer from a real holder in the latest mainnet block |
+| `build <out.rlp> --replay TXHASH` | a mined transaction on its parent state. Give its `--chain`. Needs an RPC with proofs that old |
+| `build <out.rlp> --find-swap` | find a recent mainnet Uniswap swap and rebuild it. Can take minutes |
+| `build-synthetic <from> <out.rlp>` | fake state where `<from>` holds 1 ETH, sending 0.01 |
+| `build-synthetic <from> <out.rlp> --eip1559` | the same, as EIP-1559 |
+| `build-synthetic <from> <out.rlp> --data 0x..` | the same, with calldata |
+
+```sh
+$H build /tmp/weth.rlp
+$H build-synthetic $DEAD /tmp/fake.rlp
+$H build-synthetic $DEAD /tmp/fake1559.rlp --eip1559
+$H build-synthetic $DEAD /tmp/fakedata.rlp --data 0xd0e30db0
+```
+
+These need a suitable RPC or some patience. Replace `TXHASH` with a transaction from the last
+few blocks (public nodes don't keep old proofs), or set `RPC_URL` to a node with a wider
+window. Not every transaction replays: see hole S.
+
+```sh
+$H build /tmp/replay.rlp --replay TXHASH --chain sepolia
+$H build /tmp/swap.rlp --find-swap
+```
+
+### 15.8 Compiling what goes into the firmware
+
+| Form | Does |
+|---|---|
+| `compile-descriptors <out.bin> [--tokens tokens.json] <file.json>...` | compile descriptors and the token list |
+| `compile-policy <out.bin> <policy.json>` | compile and print the policy |
+
+```sh
+scripts/compile-descriptors.sh
+$H compile-descriptors /tmp/descriptors.bin --tokens descriptors/tokens.json descriptors/weth.json
+$H compile-policy /tmp/policy.bin policy/policy.json
+```
+
+### 15.9 Light-client maintenance
+
+| Form | Does |
+|---|---|
+| `lc-anchor` | **overwrites** `crates/light-client/src/anchor.rs` with a new finalized checkpoint |
+| `lc-fixture <out.rlp>` | record and verify the newest signature |
+| `lc-fixtures <dir>` | record committees, a hand-over and a block proof for the anchor's period |
+
+```sh
+$H lc-fixture /tmp/finality.rlp
+mkdir -p /tmp/lc-fixtures
+$H lc-fixtures /tmp/lc-fixtures
+```
+
+This one changes source, so only when you mean it. `cargo test` then fails until you refresh
+the fixtures and the test's periods (part 12, "Refresh the light-client anchor"):
+
+```sh
+$H lc-anchor
+```
+
+### 15.10 Scripts
+
+| Script | Arguments | Mark |
+|---|---|---|
+| `scripts/build-device.sh` | `[app ELF or xous-core app name] [extra xtask args]`, env `SERVICE`, `GENERIC_HID` | file |
+| `scripts/run-emu.sh` | none, env `DABAO_PORT` | file |
+| `scripts/flash-and-log.py` | `[--wait SECS] [--log-secs SECS] [--until TEXT] file.uf2...` | **flash** |
+| `scripts/board-audit.py` | `[serial port]`. The board must be in boot1 | read |
+| `scripts/compile-descriptors.sh` | none | file |
+| `scripts/mcp-call.py` | `[tool] ['{json arguments}']` | depends on the tool |
+| `scripts/uniswap-calldata.py` | `<from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]` | read |
+| `demo/agent/run.sh` | none, env `MODEL` | **send** |
+| `demo/agent/compromised.sh` | none | **sign** requested, must be refused |
+| `demo/postcondition/run.sh` | `[honest]` | **send** |
+| `demo/postcondition/switch.sh` | `true` or `false` | **send** |
+
+`<from>` must hold the ETH being swapped, because the quote is simulated from it. The examples
+use the dead address, which holds test ETH.
+
+```sh
+scripts/uniswap-calldata.py $DEAD 10000000000
+scripts/uniswap-calldata.py $DEAD 10000000000 --multicall --slippage-bps 50
+scripts/flash-and-log.py --help
+```
+
+Builds (normal, with a USB console, the BLS benchmark, the first engine experiment):
+
+```sh
+scripts/build-device.sh
+GENERIC_HID=0 scripts/build-device.sh
+SERVICE=lc-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
+SERVICE=engine-spike GENERIC_HID=0 scripts/build-device.sh dabao-console
+```
+
+Demos (these send):
+
+```sh
+demo/agent/run.sh
+MODEL=haiku demo/agent/run.sh
+demo/agent/compromised.sh
+demo/postcondition/run.sh honest
+demo/postcondition/run.sh
+demo/postcondition/switch.sh false
+```
+
+### 15.11 The MCP server's tools
+
+| Tool | Arguments | Mark |
+|---|---|---|
+| `wallet_info` | none | read |
+| `device_policy` | none | read |
+| `propose_tx` | `to` (required), `reason` (required), `value_eth` (decimal ETH, not wei), `data` (hex) | **sign**, **send** unless `BAO_MCP_DRY_RUN=1` |
+
+```sh
+scripts/mcp-call.py
+scripts/mcp-call.py wallet_info
+scripts/mcp-call.py device_policy
+BAO_MCP_DRY_RUN=1 scripts/mcp-call.py propose_tx '{"to":"0x000000000000000000000000000000000000dEaD","value_eth":"0.0001","reason":"test"}'
+```
+
+Adding it to Claude Code:
+
+```sh
+claude mcp add dabao-wallet -- $PWD/target/debug/bao-mcp
+claude mcp remove dabao-wallet
+```
+
+### 15.12 Build, test and contract commands
+
+```sh
+git submodule update --init vendor/xous-core
+(cd vendor/xous-core && cargo xtask install-toolkit)
+cargo build --locked -p dabao-host -p bao-mcp
+cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp
+cargo test --locked -p policy a_router_is_not_a_recipient
+(cd contracts && forge build)
+(cd contracts && forge test --fork-url https://ethereum-sepolia-rpc.publicnode.com)
+cast calldata "pay(address,uint256)" $DEAD 100000000000000
+cast call 0x1ab73Bb30Da0a020bDa2F942F524F3CA75ab5Fc7 "keepChange()(bool)" --rpc-url https://ethereum-sepolia-rpc.publicnode.com
+```
+
+Where a changed postcondition contract would be deployed:
+
+```sh
+(cd contracts && forge build)
+INIT=$(cd contracts && forge inspect DabaoPostcondition bytecode)
+cast create2 --deployer 0x4e59b44847b379578588920cA78FbF26c0B4956C --salt 0x0000000000000000000000000000000000000000000000000000000000000000 --init-code $INIT
+```
+
+### 15.13 boot1 console commands
+
+These come from xous-core's bootloader. Type them on the board's boot1 serial port.
+
+**Safe to use**
+
+| Command | Does |
+|---|---|
+| `boot` | start the installed firmware |
+| `audit` | print the security state |
+| `reset` | restart the chip |
+| `echo TEXT` | print it back |
+| `ifr` | print the factory information region (zeros in user mode) |
+| `localecho on` or `localecho off` | echo what you type |
+| `bootwait check`, `paranoid check`, `skipping check` | show that setting |
+
+**They change the chip. Don't experiment with these.**
+
+| Command | Effect |
+|---|---|
+| `uf2 BASE64` | write one firmware block. The flash script uses it |
+| `bootwait enable`, `disable` or `toggle` | stop in boot1 at reset or not. Uses a one-way counter |
+| `skipping enable` or `disable` | clock-skipping countermeasure |
+| `boardtype TYPE` | change the board type. Uses a one-way counter |
+| `usb_speed SPEED` | change the default USB speed. Uses a one-way counter |
+| `idmode toggle` | change the external identifiers. Uses a one-way counter |
+| `altboot toggle` | change the boot partition. Uses a one-way counter |
+| `paranoid enable` | **permanent.** Detected attacks can then wipe the chip |
+| `require-pq` | **permanent.** Requires post-quantum signatures to boot |
+| `lockdown` | **permanent**, and can brick the chip |
+| `self_destruct` | **destroys the chip's secrets or the chip** |
+
+### 15.14 Environment variables
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `RPC_URL` | host, scripts | Ethereum node. May hold an API key, so never commit it. |
+| `BEACON_URL` | host | Beacon node with light-client data (default: Lodestar Sepolia). |
+| `BEACON_URL_2` | `lc-anchor` | Second node to cross-check against. |
+| `DABAO_KEYS` | host | Key folder (default `.dabao-keys/`). |
+| `DABAO_VERBOSE` | host | Also print raw logs and storage changes. |
+| `DABAO_DUMP` | host | Save the raw reply to this path. |
+| `DABAO_NO_LC` | host | Test: send no proof. The board must refuse. |
+| `DABAO_LC_REPLAY` | host | Test: send an old proof from this file. The board must refuse. |
+| `DABAO_HOST` | `bao-mcp` | Path to `dabao-host`. |
+| `BAO_MCP_CHAIN` | `bao-mcp` | Default `sepolia`. |
+| `BAO_MCP_DRY_RUN` | `bao-mcp` | Co-sign but don't execute. |
+| `MODEL` | agent demo | `sonnet` (default) or `haiku`. |
+| `DABAO_PORT` | emulator | TCP port (default 7610). |
+| `DABAO_SIGNER_KEY` | emulator | Key file. |
+| `DABAO_SLOTS_DIR` | emulator | Folder for fake slots. |
+| `DABAO_XOUS_CORE` | scripts | A different xous-core checkout. (A plain `XOUS_CORE` is ignored on purpose.) |
+| `SERVICE` | build script | Program for the system image (default `verifier`). |
+| `GENERIC_HID` | build script | `0` gives a USB console instead of the HID transport. |
+| `PYTHON` | flash script | Python that has pyserial. |
+
+```sh
+DABAO_NO_LC=1 $H send-tx --chain sepolia --to $DEAD --value 1
+DABAO_DUMP=/tmp/reply.bin $H status
+BEACON_URL=https://lodestar-sepolia.chainsafe.io $H lc-sync
+```

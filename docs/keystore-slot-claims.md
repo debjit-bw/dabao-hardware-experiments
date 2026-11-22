@@ -106,7 +106,6 @@ Build and run:
 ```sh
 cargo build --release -p keystore-probe --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x
 GENERIC_HID=0 scripts/build-device.sh target/riscv32imac-unknown-xous-elf/release/keystore-probe
-# press RESET on the board, then:
 PYTHON=<python with pyserial, progressbar2> scripts/flash-and-log.py --until "PROBE summary" \
     vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{xous,apps}.uf2
 ```

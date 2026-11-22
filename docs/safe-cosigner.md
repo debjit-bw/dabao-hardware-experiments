@@ -62,13 +62,15 @@ device's prediction.
 ## Commands
 
 ```
-dabao-host safe keys                      # create / show the agent and recovery keys
-dabao-host safe create --chain sepolia    # the agent deploys the Safe (owners: agent, device, recovery)
-dabao-host safe fund --value WEI          # agent -> Safe, no device involved
-dabao-host safe send --to ADDR [--value WEI] [--data 0x..] [--broadcast]   # device co-signs, agent executes
-dabao-host safe send ... --agent-only     # what the agent can do alone (eth_call only)
-dabao-host safe info
+dabao-host safe keys
+dabao-host safe create --chain sepolia
+dabao-host safe fund --chain sepolia --value WEI
+dabao-host safe send --chain sepolia --to ADDR [--value WEI] [--data 0x..] [--broadcast]
+dabao-host safe send --chain sepolia --to ADDR --agent-only
+dabao-host safe info --chain sepolia
 ```
+
+Every option, with examples: [GUIDE.md](GUIDE.md#15-command-reference).
 
 ## Limits / next
 

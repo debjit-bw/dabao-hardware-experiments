@@ -1,3 +1,6 @@
+//! Adapted from btchip/ethereum-app dabao-app-eth-burner (MIT OR Apache-2.0), with changes:
+//! the framing.
+//!
 //! Process 1 of 3: the transport. Untrusted by design: it only delimits frames
 //! (`sim_types::wire`) and forwards `TYPE_SIMULATE` payloads, unparsed, to the verifier.
 //! A bug here can garble or drop requests, but can't touch verification or keys.

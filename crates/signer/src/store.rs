@@ -1,3 +1,6 @@
+//! Adapted from btchip/ethereum-app dabao-app-eth-burner (MIT OR Apache-2.0), with changes:
+//! the key storage.
+//!
 //! Key storage: two 32-byte keystore app slots (device) or a host file (emulator).
 //! * slot 0: the secp256k1 secret key;
 //! * slot 1: `MAGIC` and the first 24 bytes of SHA-256(key), written last, so a key is only

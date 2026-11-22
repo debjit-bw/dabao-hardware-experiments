@@ -1,3 +1,6 @@
+//! Adapted from btchip/ethereum-app dabao-app-eth-burner (MIT OR Apache-2.0), with changes:
+//! the keystore calls.
+//!
 //! Claimed keystore app slots (32 bytes each, RRAM) on the device, or a host file (emulator).
 //!
 //! Device: `base..base + len` claimed with our keystore patch (`AppKey::Claim`,
