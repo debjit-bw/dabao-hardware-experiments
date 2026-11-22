@@ -91,9 +91,17 @@ pub struct Reads {
     pub code_hashes: Vec<B256>,
 }
 
-/// A follow-up call from `tx.from` (contract mode only) on the state after the transaction and
-/// any earlier follow-up calls: `(to, calldata) -> (success, output)`.
-pub type PostCall<'a> = dyn FnMut(Address, Vec<u8>) -> Result<(bool, Bytes), String> + 'a;
+/// The state a follow-up call runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum At {
+    /// Before the transaction. Only possible before the first [`At::Post`] call.
+    Pre,
+    /// After the transaction and any earlier [`At::Post`] calls.
+    Post,
+}
+
+/// A follow-up call from `tx.from` (contract mode only): `(state, to, calldata) -> (success, output)`.
+pub type PostCall<'a> = dyn FnMut(At, Address, Vec<u8>) -> Result<(bool, Bytes), String> + 'a;
 
 /// `simulate` with [`Options`]; returns the result and the pre-state `reads`.
 pub fn simulate_opts(raw: &[u8], tamper: impl FnOnce(&mut SimInput), opts: &Options) -> Result<(SimResult, Vec<U256>), String> {
@@ -229,12 +237,21 @@ pub fn simulate_then<R>(
     };
     r.effects = crate::effects::effects(&input.tx, &input.block, &r);
 
-    // follow-up calls see the transaction's effects
-    evm.commit(state);
+    // the transaction is committed by the first Post call, so Pre calls can still see the pre-state
+    let mut uncommitted = Some(state);
     let (from, chain_id, as_contract) = (input.tx.from, input.chain_id, opts.as_contract);
-    let mut call = |to: Address, data: Vec<u8>| -> Result<(bool, Bytes), String> {
+    let mut call = |at: At, to: Address, data: Vec<u8>| -> Result<(bool, Bytes), String> {
         if !as_contract {
             return Err("follow-up calls are only for contract mode".into());
+        }
+        match at {
+            At::Pre if uncommitted.is_none() => return Err("pre-state calls must come before post-state calls".into()),
+            At::Pre => {}
+            At::Post => {
+                if let Some(state) = uncommitted.take() {
+                    evm.commit(state);
+                }
+            }
         }
         let tx = TxEnv::builder()
             .caller(from)
@@ -247,7 +264,9 @@ pub fn simulate_then<R>(
             .build()
             .map_err(|e| format!("tx env: {e:?}"))?;
         let out = evm.transact(tx).map_err(|e| format!("follow-up call: {e:?}"))?;
-        evm.commit(out.state);
+        if at == At::Post {
+            evm.commit(out.state);
+        }
         Ok((out.result.is_success(), out.result.output().cloned().unwrap_or_default()))
     };
     let extra = then(&mut r, &reads, &mut call);

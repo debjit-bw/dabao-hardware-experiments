@@ -341,6 +341,16 @@ pub fn check(set: &DescriptorSet, chain_id: u64, tx: &SimTx, success: bool, effe
         }
     }
 
+    // what the sender pays vs the maximum the user is shown (exact output)
+    for &(_, asset, shown_amount) in &shown.token_fields {
+        let Some(loss) = effects.iter().find(|e| e.kind == effect::NET_LOSS && e.contract == asset).map(|e| e.amount) else {
+            continue;
+        };
+        if shown_amount > loss {
+            out.max_spend.push(sim_types::MaxSpend { asset, shown: shown_amount, simulated: loss });
+        }
+    }
+
     // network fee: what the simulation paid, and the most the signed tx can pay. Gas price 0 =
     // a call made by a contract (a Safe's inner call): its executor pays, not the sender.
     if tx.gas_price == 0 {

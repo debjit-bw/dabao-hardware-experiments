@@ -8,7 +8,7 @@ A signer for the Baochip Dabao (Baochip-1x, Xous). Before every signature, the b
    missing state fails closed (docs/effects-inspector.md);
 3. **checks that every effect it recognises is explained** by an ERC-7730 field
    (docs/clear-signing.md);
-4. **applies the owner's policy**: daily limits in RRAM, an allowlist, fee and slippage caps,
+4. **applies the owner's policy**: daily limits in RRAM, who may be called or paid, fee and slippage caps,
    compiled into the firmware (docs/policy.md);
 5. **signs a digest it built itself**, in a separate process. A keystore patch denies that
    process's key slots to other processes (docs/keystore-slot-claims.md).
@@ -18,8 +18,8 @@ shown, and the host is untrusted, so today the policy in the firmware is the onl
 
 The board can also **co-sign for a 2-of-3 Safe** used by an AI agent (docs/safe-cosigner.md,
 docs/agent-wallet.md). It co-signs only a batch that ends in an **on-chain postcondition**,
-which reverts if a tracked balance is below an absolute floor, or a checked Safe setting
-changed, at inclusion (docs/postcondition.md; see the limits below).
+which reverts at inclusion if a tracked balance changes worse than simulated, a checked Safe
+setting changed, or the co-signature expired (docs/postcondition.md).
 
 This is a hackathon prototype, tested on Sepolia with tiny amounts and not audited. Each doc
 has measurements, transaction links and limits. Don't put real funds behind it.
@@ -90,16 +90,6 @@ demo/postcondition/run.sh             # state changes between co-signing and exe
 
 ## Status and limits
 
-Three known holes, each reproduced (details: [docs/GUIDE.md](docs/GUIDE.md), part 6):
-
-- **An allowlisted router can be a swap recipient**, which skips the slippage rule and leaves
-  the output for anyone to sweep, up to the daily limit.
-- **The postcondition's floors are absolute**, so a deposit before execution can absorb a loss.
-- **Co-signatures don't expire**, and a reverted Safe transaction publishes them for reuse
-  until its nonce is used.
-
-Also:
-
 - **No trusted display, no on-device confirmation.**
 - **The host chooses part of the simulated block**: base fee, gas limit, beneficiary and
   prevrandao aren't checked against the proven parent, so a contract that reads them can
@@ -109,6 +99,7 @@ Also:
 - **The light client follows optimistic (unfinalized) headers**, trusts 2/3 of the sync
   committee and can't know that a header is the newest.
 - **Transactions from the board's own account have no postcondition.**
+- **Safe swaps don't fit on the board yet**: their witness is ~158 KB, over the 140 KiB limit.
 - **The postcondition checks only the tracked balances and some Safe settings.** It doesn't
   check approvals, NFTs or other assets.
 - **The demo Safe's agent and recovery keys are files on the same machine.** Whoever controls

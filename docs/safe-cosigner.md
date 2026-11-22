@@ -22,7 +22,7 @@ after its own checks.
    this call only; gas price 0, because the executor pays the gas, not the Safe.
 2. **ERC-7730 check** with the Safe as the sender: every effect on the Safe's assets must be
    explained by a shown field.
-3. **Policy** with the Safe as the spender: allowlist, daily limits (the same counters as the
+3. **Policy** with the Safe as the spender: address rules, daily limits (the same counters as the
    device's own account: one daily budget for everything the device signs), slippage.
 4. **The Safe's configuration, from verified storage** (the witness must include these
    slots, and their proofs are checked like every other):
@@ -40,7 +40,7 @@ after its own checks.
 5. **The signer builds the hash itself.** The verifier sends the approved fields and the
    verified nonce; the signer computes the SafeTx EIP-712 hash
    (`sim_types::safe::tx_hash_op`: domain `{chainId, verifyingContract}`, operation DELEGATECALL
-   to MultiSendCallOnly with [the call, the postcondition], no gas-refund parameters) and returns a 65-byte owner signature (`v` = 27/28).
+   to MultiSendCallOnly with [begin, the call, check], no gas-refund parameters) and returns a 65-byte owner signature (`v` = 27/28).
 
 The host then checks the device's signature against the hash it computes itself and against
 the Safe's own `getTransactionHash`. The agent adds its signature, the signatures are sorted by
@@ -74,7 +74,7 @@ dabao-host safe info
 
 - **Gap between simulation and inclusion: narrowed** by the on-chain postcondition
   (docs/postcondition.md). The device co-signs only a DELEGATECALL to MultiSendCallOnly with
-  [the call, `DabaoPostcondition.check(...)`], which reverts the Safe transaction unless the
+  [`begin`, the call, `check`], which reverts the Safe transaction unless the
   Safe's tracked balances and checked settings hold at inclusion. Approvals and other assets
   are not checked.
 - The agent + recovery keys can execute without the device. That's intended (the human

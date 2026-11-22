@@ -17,7 +17,7 @@ Code: `crates/policy` (rules, host-testable), `crates/verifier/src/counters.rs` 
 
 ## Trust model
 
-- **The policy is part of the firmware.** `policy/policy.json` is compiled into a 228-byte RLP
+- **The policy is part of the firmware.** `policy/policy.json` is compiled into a 229-byte RLP
   blob (`crates/policy/policy.bin`, built by `scripts/compile-descriptors.sh`) embedded in the
   verifier. Changing it means building and flashing a new image; there is no runtime API to
   change it.
@@ -51,7 +51,10 @@ Code: `crates/policy` (rules, host-testable), `crates/verifier/src/counters.rs` 
 | assets without a limit | the transaction spends an asset with no limit (`"unlimitedAssets": "refuse"`); NFT transfers out and NFT approvals likewise |
 | network fee | `gas_limit × max fee` > `maxNetworkFee` |
 | slippage | a shown swap minimum is more than `maxSlippageBps` below the simulated output (from `ClearSign.min_receive`) |
-| allowlist | `tx.to`, or any address the user is shown (recipient, spender, beneficiary), is neither the device nor on `allowlist` |
+| may call | the call has calldata and `tx.to` is not in `contracts` |
+| may receive | a plain transfer's target, or any shown address, is neither the sender nor in `recipients`. (A contract in `contracts` may be shown as a spender, if nothing is sent to it.) |
+| swaps | not exactly one swap paid out to the sender, or the sender gains nothing, or an exact-output maximum is more than `maxSlippageBps` above the simulated input |
+| no leftovers | the called contract ends up keeping ETH or tokens (wrapping excepted): anyone can sweep a router |
 
 Amounts in `policy.json` are whole units ("0.005" ETH, "1" USDC), converted with the
 decimals of the firmware's token list. A limit can only name an asset the device can also
@@ -61,7 +64,8 @@ display.
 
 ```
 max network fee 0.002 ETH; max slippage 300 bps; assets without a limit refused
-allow SwapRouter02 0x3bFA…e48E, WETH9 0xfFf9…6B14, burn address 0x…dEaD, DemoPayRouter 0x1ab7…5Fc7
+may call SwapRouter02 0x3bFA…e48E, WETH9 0xfFf9…6B14, DemoPayRouter 0x1ab7…5Fc7
+may receive: the sender, burn address 0x…dEaD
 daily limits: 0.005 ETH, 0.002 WETH, 1 USDC
 ```
 
@@ -71,9 +75,6 @@ Every `sign` / `send-tx` prints the policy's notes (e.g. "ETH: 0.00103 ETH this 
 
 ## Limits / next
 
-- **The allowlist doesn't separate "may call" from "may receive".** An allowlisted router as a
-  swap recipient passes every rule, and with no gain to the sender the slippage rule never
-  runs (docs/GUIDE.md, hole A).
 - **Counters are stored by position**: inserting or reordering limits resets today's spending.
 - **Time comes from the light client.** A day is `block.timestamp / 86400` of the simulated
   block, which must be the parent's timestamp + 12 s, and the parent header must be proven

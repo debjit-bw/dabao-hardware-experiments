@@ -196,6 +196,19 @@ pub struct ClearSign {
     /// Shown amounts of assets the sender gains that are below what the simulation gains
     /// (swap minimums), for the policy's slippage limit.
     pub min_receive: Vec<MinReceive>,
+    /// Shown amounts of assets the sender loses that are above what the simulation loses
+    /// (exact-output maximums), for the policy's slippage limit.
+    pub max_spend: Vec<MaxSpend>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+pub struct MaxSpend {
+    /// The asset (zero = ETH).
+    pub asset: Address,
+    /// The shown maximum.
+    pub shown: U256,
+    /// What the simulation actually loses.
+    pub simulated: U256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
@@ -321,7 +334,7 @@ impl SignJob {
     /// A Safe transaction with operation CALL (no longer issued by the verifier).
     pub const SAFE: u8 = 1;
     /// A Safe transaction with operation DELEGATECALL to [`safe::MULTISEND_CALL_ONLY`]: the
-    /// simulated call followed by the on-chain postcondition. The signer refuses any other
+    /// simulated call between the postcondition's begin and check. The signer refuses any other
     /// DELEGATECALL target.
     pub const SAFE_MULTISEND: u8 = 2;
 }
@@ -464,8 +477,8 @@ pub mod safe {
     /// `contracts/src/DabaoPostcondition.sol`, deployed with the deterministic CREATE2 deployer
     /// (salt 0), so this address commits to its init code. The code hash is checked too: a call
     /// to an address without code succeeds, which would make the postcondition a no-op.
-    pub const POSTCONDITION: Address = address!("0xf864caDe5938aB798D69e07002445C7A068b310F");
-    pub const POSTCONDITION_CODEHASH: B256 = b256!("0x4b87d3230344be20c0d96d9491afeb98edd7139e2b6ab10284d54657088dbbf9");
+    pub const POSTCONDITION: Address = address!("0x0435e385AA3BAA0D9D782458DC3B10621702b26D");
+    pub const POSTCONDITION_CODEHASH: B256 = b256!("0xe7c0d340c183ef9478783a16872ef189dcc8f0cf3021baf8e448d194e7f8fa92");
 
     fn push_word(v: &mut alloc::vec::Vec<u8>, w: U256) {
         v.extend_from_slice(&w.to_be_bytes::<32>());
@@ -491,15 +504,45 @@ pub mod safe {
         v
     }
 
-    /// `DabaoPostcondition.check(device, threshold, assets, floors)` calldata.
-    pub fn check_calldata(device: Address, threshold: U256, assets: &[Address], floors: &[U256]) -> alloc::vec::Vec<u8> {
-        let mut v = alloc::vec![0xdc, 0xcb, 0x59, 0x2e];
+    pub const BEGIN_SELECTOR: [u8; 4] = [0xd3, 0x10, 0x2a, 0x62];
+    pub const CHECK_SELECTOR: [u8; 4] = [0x64, 0xe1, 0x7f, 0xcd];
+
+    /// `DabaoPostcondition.begin(assets)` calldata.
+    pub fn begin_calldata(assets: &[Address]) -> alloc::vec::Vec<u8> {
+        let mut v = BEGIN_SELECTOR.to_vec();
+        push_word(&mut v, U256::from(32));
+        push_array(&mut v, assets, push_addr);
+        v
+    }
+
+    /// `DabaoPostcondition.check(device, threshold, deadline, assets, minDeltas)` calldata
+    /// (`min_deltas`: int256, two's complement).
+    pub fn check_calldata(device: Address, threshold: U256, deadline: u64, assets: &[Address], min_deltas: &[U256]) -> alloc::vec::Vec<u8> {
+        let mut v = CHECK_SELECTOR.to_vec();
         push_addr(&mut v, device);
         push_word(&mut v, threshold);
-        push_word(&mut v, U256::from(128));
-        push_word(&mut v, U256::from(128 + 32 + 32 * assets.len()));
+        push_word(&mut v, U256::from(deadline));
+        push_word(&mut v, U256::from(160));
+        push_word(&mut v, U256::from(160 + 32 + 32 * assets.len()));
         push_array(&mut v, assets, push_addr);
-        push_array(&mut v, floors, push_word);
+        push_array(&mut v, min_deltas, push_word);
+        v
+    }
+
+    /// `DabaoPostcondition.verify(...)`: `check` with the earlier balances given.
+    pub fn verify_calldata(device: Address, threshold: U256, deadline: u64, assets: &[Address], pre: &[U256], min_deltas: &[U256]) -> alloc::vec::Vec<u8> {
+        let mut v = alloc::vec![0x8f, 0xf5, 0x2c, 0xc1];
+        push_addr(&mut v, device);
+        push_word(&mut v, threshold);
+        push_word(&mut v, U256::from(deadline));
+        let first = 192;
+        let second = first + 32 + 32 * assets.len();
+        push_word(&mut v, U256::from(first));
+        push_word(&mut v, U256::from(second));
+        push_word(&mut v, U256::from(second + 32 + 32 * pre.len()));
+        push_array(&mut v, assets, push_addr);
+        push_array(&mut v, pre, push_word);
+        push_array(&mut v, min_deltas, push_word);
         v
     }
 
@@ -580,8 +623,8 @@ pub struct SignResult {
     /// This device's signing address.
     pub signer: Address,
     /// Safe co-signing: the `data` of the SafeTx the device signed (to
-    /// [`safe::MULTISEND_CALL_ONLY`], operation DELEGATECALL, value 0): the simulated call, then
-    /// the postcondition. The executor must submit exactly this.
+    /// [`safe::MULTISEND_CALL_ONLY`], operation DELEGATECALL, value 0): [begin, the simulated
+    /// call, check]. The executor must submit exactly this.
     pub safe_data: Bytes,
 }
 

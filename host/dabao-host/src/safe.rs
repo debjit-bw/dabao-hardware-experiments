@@ -45,7 +45,7 @@ sol! {
         event ExecutionFailure(bytes32 txHash, uint256 payment);
     }
     interface IPostcondition {
-        function check(address device, uint256 threshold, address[] assets, uint256[] floors);
+        function check(address device, uint256 threshold, uint256 deadline, address[] assets, int256[] minDeltas);
     }
     interface IBalanceOf {
         function balanceOf(address who) view returns (uint256);
@@ -221,7 +221,7 @@ fn local_device(raw: &[u8], input: &SimInput, device: Address) -> Result<std::re
         r.clear_sign = clear_sign::check(&descriptors, input.chain_id, &input.tx, r.success, &r.effects);
         r.policy = policy::evaluate(&pol, &[], &descriptors, input, r).check;
         let post = r.success.then(|| {
-            xous_evm::postcondition::build(r, &input.tx, device, reads.slots[1], &reads.code_hashes, &limited, call)
+            xous_evm::postcondition::build(r, &input.tx, device, reads.slots[1], input.block.timestamp, &reads.code_hashes, &limited, call)
         });
         post
     });
@@ -255,19 +255,31 @@ fn local_device(raw: &[u8], input: &SimInput, device: Address) -> Result<std::re
 /// Print what the device's batch asserts; check its first call is exactly the requested one.
 fn show_batch(safe_data: &[u8], a: &Args, chain_id: u64) -> Result<()> {
     let calls = safe::multisend_decode(safe_data).context("device's SafeTx data is not a MultiSendCallOnly batch")?;
-    ensure!(calls.len() == 2, "batch has {} calls, expected [call, postcondition]", calls.len());
+    ensure!(calls.len() == 3, "batch has {} calls, expected [begin, call, check]", calls.len());
     ensure!(
-        calls[0].to == a.to && calls[0].value == a.value && calls[0].data == a.data.as_ref(),
-        "the batch's first call is not the requested call"
+        calls[1].to == a.to && calls[1].value == a.value && calls[1].data == a.data.as_ref(),
+        "the batch's middle call is not the requested call"
     );
-    ensure!(calls[1].to == safe::POSTCONDITION && calls[1].value.is_zero(), "the batch doesn't end in the postcondition");
-    let c = IPostcondition::checkCall::abi_decode(&calls[1].data).context("decode check(...)")?;
+    for (i, selector) in [(0, safe::BEGIN_SELECTOR), (2, safe::CHECK_SELECTOR)] {
+        ensure!(
+            calls[i].to == safe::POSTCONDITION && calls[i].value.is_zero() && calls[i].data.starts_with(&selector),
+            "the batch isn't wrapped in the postcondition"
+        );
+    }
+    let c = IPostcondition::checkCall::abi_decode(&calls[2].data).context("decode check(...)")?;
     println!("postcondition (checked at inclusion, else the whole Safe tx reverts):");
     println!("  device {} still an owner, threshold {}, no module, no guard", c.device, c.threshold);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+    println!("  expires at {} (in {} s)", c.deadline, c.deadline.saturating_to::<u64>().saturating_sub(now));
     let tokens = clear_sign::builtin();
-    for (asset, floor) in c.assets.iter().zip(&c.floors) {
-        let name = clear_sign::check::format_amount(&tokens, chain_id, *asset, *floor);
-        println!("  Safe balance >= {name}{}", if asset.is_zero() { String::new() } else { format!(" ({asset})") });
+    for (asset, d) in c.assets.iter().zip(&c.minDeltas) {
+        let amount = clear_sign::check::format_amount(&tokens, chain_id, *asset, d.unsigned_abs());
+        let bound = match (d.is_negative(), d.is_zero()) {
+            (true, _) => format!("loses at most {amount}"),
+            (_, true) => format!("loses no {}", clear_sign::check::asset_label(&tokens, chain_id, *asset)),
+            _ => format!("gains at least {amount}"),
+        };
+        println!("  Safe {bound}{}", if asset.is_zero() { String::new() } else { format!(" ({asset})") });
     }
     Ok(())
 }
@@ -338,7 +350,7 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     // the Safe's configuration slots the device checks before co-signing
     al.0.push(AccessListItem { address: s, storage_keys: safe::slots(device).iter().map(|x| B256::from(*x)).collect() });
     // what the postcondition reads: the Safe's balance of every candidate asset (the policy's
-    // limited assets, and any token the call touches), via the same check(...) with zero floors
+    // limited assets, and any token the call touches), via verify(...) with zero balances and changes
     let threshold = call(p, s, ISafe::getThresholdCall {}, at).await?;
     let pol = policy::builtin();
     let mut candidates: Vec<Address> =
@@ -353,9 +365,9 @@ pub async fn send(p: &impl Provider, a: Args, tcp: Option<&str>) -> Result<()> {
     }
     candidates.insert(0, Address::ZERO);
     let zeros = vec![U256::ZERO; candidates.len()];
-    // balances(...) reads every asset whatever the Safe's state; check(...) adds the Safe's own
+    // balances(...) reads every asset whatever the Safe's state; verify(...) adds the Safe's own
     // getters (it may revert early, e.g. for an emulator device that isn't an owner)
-    for data in [safe::balances_calldata(s, &candidates), safe::check_calldata(device, threshold, &candidates, &zeros)] {
+    for data in [safe::balances_calldata(s, &candidates), safe::verify_calldata(device, threshold, u64::MAX, &candidates, &zeros, &zeros)] {
         let creq = TransactionRequest::default().with_from(s).with_to(safe::POSTCONDITION).with_input(data);
         match p.create_access_list(&creq).block_id(at).await {
             Ok(cal) => {

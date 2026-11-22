@@ -5,7 +5,7 @@
 # switched on keepChange (contracts/src/DemoPayRouter.sol; the owner is played by the agent key).
 #
 #   1. The Safe pays 0.0001 ETH to 0x..dEaD through the router, sending 0.0005 (0.0004 change).
-#      The device simulates: net cost 0.0001. It co-signs [the call, check(Safe ETH >= before - 0.0001)].
+#      The device simulates: net cost 0.0001. It co-signs [begin, the call, check(Safe ETH change >= -0.0001, deadline)].
 #   2. Between co-signing and execution the router's owner switches keepChange on: the same
 #      call would now cost the Safe 0.0005.
 #   3. The agent executes anyway (--force, so the revert lands on chain): the postcondition

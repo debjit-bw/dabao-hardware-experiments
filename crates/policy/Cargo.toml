@@ -3,7 +3,7 @@ name = "policy"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "The device's signing policy: daily spending limits (counters in RRAM), max fee, max slippage, address allowlist"
+description = "The device's signing policy: daily spending limits (counters in RRAM), max fee, max slippage, callable contracts, recipients"
 
 [dependencies]
 sim-types = { path = "../sim-types" }

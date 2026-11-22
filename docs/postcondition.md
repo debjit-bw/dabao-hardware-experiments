@@ -6,47 +6,50 @@ between: an upgradeable proxy, a token's fee, a pool's price, a contract whose o
 switch. The device's checks would then have checked the wrong transaction.
 
 So the device never co-signs the call itself. It co-signs a **DELEGATECALL to Safe's
-MultiSendCallOnly 1.4.1** with two CALLs from the Safe:
+MultiSendCallOnly 1.4.1** with three CALLs from the Safe
+([contracts/src/DabaoPostcondition.sol](../contracts/src/DabaoPostcondition.sol)):
 
-1. the simulated call;
-2. `DabaoPostcondition.check(device, threshold, assets, floors)`
-   ([contracts/src/DabaoPostcondition.sol](../contracts/src/DabaoPostcondition.sol)).
+1. `begin(assets)`: snapshot the Safe's balances in transient storage;
+2. the simulated call;
+3. `check(device, threshold, deadline, assets, minDeltas)`.
 
 `check` reverts unless, **at inclusion**:
 
+- the deadline hasn't passed (the simulated block's proven time + 600 s);
 - the device is still an owner, the threshold is unchanged, and there is no module and no guard;
-- for every asset (ETH, every asset the policy limits, every token the simulation moved to or
-  from the Safe), the Safe's balance is at least its **simulated post-balance minus the
-  slippage the user was shown** (the simulated output minus the shown minimum).
+- for every tracked asset (ETH, every asset the policy limits, every token the simulation
+  moved to or from the Safe), the balance **changed since `begin`** by at least the simulated
+  change minus the slippage the user was shown.
 
-If `check` reverts, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0). The
-floors are **absolute balances**, so this does not bound the loss if the Safe receives funds
-in between. Only tracked balances and checked settings are covered: see Limits.
+If `check` reverts, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0).
+Changes, not absolute balances: a deposit before execution can't absorb a loss. The deadline:
+signatures published by a reverted transaction expire. Nothing untracked is covered: see Limits.
 
 ## Why it can be trusted
 
 | Piece | How the device knows it |
 |---|---|
 | MultiSendCallOnly | Canonical address. Its code hash `0xecd5…9939` (same on mainnet and Sepolia) is checked in the verified witness. Its batch can only CALL, so the DELEGATECALL can't run arbitrary code as the Safe. |
-| DabaoPostcondition | Deployed with the deterministic CREATE2 deployer (salt 0) at `0xf864…310F`, so the address commits to the init code (compiler settings are pinned in `contracts/foundry.toml`). Its code hash is also checked in the witness. This matters: a call to an address without code *succeeds*, which would make the check a no-op. Stateless, no owner, no upgrade path. |
-| The floors | The device runs `balances(...)` and then `check(...)` itself, on the simulated post-state (revm with a `CacheDB` over the verified trie: `xous_evm::sim::simulate_then`). It co-signs only if the check passes there. |
-| The batch | Built by the verifier (`xous_evm::postcondition::build`). The signer re-checks the shape before hashing: DELEGATECALL only to MultiSendCallOnly, value 0, exactly [call, postcondition]. A bare Safe call (operation CALL) is no longer signed at all. |
+| DabaoPostcondition | Deployed with the deterministic CREATE2 deployer (salt 0) at `0x0435…b26D`, so the address commits to the init code (compiler settings are pinned in `contracts/foundry.toml`). Its code hash is also checked in the witness. This matters: a call to an address without code *succeeds*, which would make the check a no-op. Stateless, no owner, no upgrade path. |
+| The changes | The device reads `balances(...)` on the pre- and post-state and runs `verify(...)`, the same check, on the simulated post-state (revm with a `CacheDB` over the verified trie: `xous_evm::sim::simulate_then`). It co-signs only if the check passes there. |
+| The batch | Built by the verifier (`xous_evm::postcondition::build`). The signer re-checks the shape before hashing: DELEGATECALL only to MultiSendCallOnly, value 0, exactly [begin, call, check]. A bare Safe call (operation CALL) is no longer signed at all. |
 
-The host checks that the batch's first call is exactly the requested one, prints what the
+The host checks that the batch's middle call is exactly the requested one, prints what the
 postcondition asserts, compares the SafeTx hash with the Safe's own `getTransactionHash`
 (operation 1), and runs a pre-flight via `Safe.simulateAndRevert` (a DELEGATECALL from the Safe's
 context on the latest state, no signatures needed).
 
-**A co-signed SafeTx stays valid until its nonce is used, and a reverted execution publishes
-both signatures, so anyone can submit it again.** Executing it later still runs the check, but
-after a deposit the old floors no longer bound the loss.
-What isn't checked (approvals, untracked assets) can differ from what was simulated.
+A reverted execution still publishes both signatures. They work only until the deadline, and
+only with the same checks.
 
 ## On the board (Sepolia, 2026-11-22)
 
+These runs used contract v1 (`0xf864…310F`: absolute floors, no deadline), which had two holes
+fixed in v2: deposits absorbed losses, and published signatures never expired.
+
 Demo contract: [contracts/src/DemoPayRouter.sol](../contracts/src/DemoPayRouter.sol) at
 `0x1ab7…5Fc7`. `pay(to, amount)` forwards `amount` and refunds the change, unless its owner
-has switched on `keepChange`. It's allowlisted and has a 7730 descriptor, as a trusted
+has switched on `keepChange`. It may be called (policy) and has a 7730 descriptor, as a trusted
 contract whose behaviour can still change would.
 
 | Case | Result |
@@ -65,18 +68,18 @@ buffer copy).
 
 ## Limits
 
-- **Deposits absorb losses.** Floors are absolute. Reproduced on a fork: a payment simulated at
-  0.0001 ETH cost 0.0005 after a 0.0004 deposit, and `check` passed.
-- **No expiry.** See above; use up the nonce after any reverted or abandoned co-signature.
+- **Valid for 10 minutes.** Within that window anyone can submit a published co-signature.
+  Execute promptly, or use up the nonce.
+- **Safe swaps don't fit on the board yet**: ~158 KB witness, over the 140 KiB limit.
 - **Untracked assets aren't asserted.** A token the simulation didn't move and the policy
   doesn't list, NFTs and ERC-1155s can change at inclusion without failing the check.
-- **Slippage floors haven't been exercised through the Safe on the board**, only ETH floors.
+- **Slippage allowances haven't been exercised through the Safe on the board**, only ETH.
 - **Allowances aren't asserted.** An approval the call grants is counted by the policy at its
   full amount, but `check` only looks at balances.
-- **Strict for exact-output trades.** The floor uses the simulated loss. A swap whose input
+- **Strict for exact-output trades.** The check uses the simulated loss. A swap whose input
   varies (exact output, `amountInMaximum`) reverts if it costs more than simulated, even
   within the shown maximum. That's fail-safe, not fail-open.
 - **The light client trails the head by a few blocks.** A Safe transaction simulated right
   after a state change can be simulated on the state before it (row 4). The postcondition
-  still enforces the floors computed on that older state.
+  still enforces the changes computed on that older state.
 - **Gas.** The batch costs ~30–40k gas more, paid by the executor.

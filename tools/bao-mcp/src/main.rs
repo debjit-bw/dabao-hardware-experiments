@@ -100,7 +100,9 @@ fn verdict_lines(out: &str) -> Vec<&str> {
                 || l.starts_with("REJECTED")
                 || l.starts_with("light client:")
                 || l.starts_with("pre-flight")
-                || l.starts_with("Safe balance >=")
+                || l.starts_with("Safe loses")
+                || l.starts_with("Safe gains")
+                || l.starts_with("expires at")
                 || l.starts_with("NOT EXECUTED")
                 || l.starts_with("included in block")
                 || l.starts_with("agent executes")
@@ -149,7 +151,7 @@ fn propose(args: &Value) -> Result<(bool, String), String> {
                       This decision is made on the device and cannot be overridden from here. Report the reason to the user; \
                       do not retry with variations to get around it.",
         "executed" => "EXECUTED: the Dabao co-signed after its own simulation and checks, and the Safe executed the call.",
-        "error" => "ERROR: the proposal did not reach a device verdict (see the log below). Nothing was executed.",
+        "error" => "ERROR: the proposal didn't finish (see the log below). If the log has 'agent executes', a transaction was sent: check it before retrying.",
         "reverted" => "REVERTED on chain: the Dabao co-signed, but at inclusion its on-chain postcondition failed (the state changed since the \
                        simulation), so the Safe transaction reverted and the Safe's funds did not move.",
         "not executed (postcondition)" => "NOT EXECUTED: the Dabao co-signed, but on the latest state its on-chain postcondition would fail \
@@ -175,7 +177,7 @@ fn tools() -> Value {
         },
         {
             "name": "device_policy",
-            "description": "The signing policy enforced by the Dabao co-signer (allowlist, daily limits, fee and slippage caps) and today's spending counters, as reported by the device itself. Check this before proposing.",
+            "description": "The signing policy enforced by the Dabao co-signer (who may be called or paid, daily limits, fee and slippage caps) and today's spending counters, as reported by the device itself. Check this before proposing.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {

@@ -275,22 +275,21 @@ This is `dabao-host safe send`.
 3. It reads the Safe's settings from proven storage: the board is an owner, the threshold is
    at least 2, there are no modules and no guard. It also takes the Safe's nonce from there.
 4. It runs the same display and policy checks, with the Safe as the spender.
-5. It reads the Safe's balances **after** the simulated call. These become "floors".
-6. It builds a batch of two calls:
+5. It reads the Safe's balances before and after the simulated call. The differences, less
+   any shown slippage, become the smallest changes it will accept.
+6. It builds a batch of three calls:
 
    ```
    Safe --DELEGATECALL--> MultiSendCallOnly
-                            |-- CALL 1: the payment the agent asked for
-                            |-- CALL 2: DabaoPostcondition.check(owner, threshold, assets, floors)
+                            |-- CALL 1: DabaoPostcondition.begin(assets)   record balances
+                            |-- CALL 2: the payment the agent asked for
+                            |-- CALL 3: DabaoPostcondition.check(owner, threshold, deadline, assets, minimum changes)
    ```
 
 7. It tests that check on the simulated state, then signs the hash of the batch.
 8. The agent's key adds the second signature and submits the transaction.
-9. On chain, if a balance is below its floor or a checked setting changed, the whole
-   transaction reverts.
-
-For a swap with a shown minimum, the floor is lowered by the gap between the simulated output
-and that minimum.
+9. On chain, if a balance changed worse than allowed, a checked setting changed, or 10
+   minutes have passed, the whole transaction reverts.
 
 ### 4.5 The committee hand-over
 
@@ -316,7 +315,7 @@ The host only carries the data. After a long gap, `lc-sync` walks forward one pe
 ### Signing
 
 - Legacy and EIP-1559 transactions from its own account.
-- Owner signatures for a Safe 1.4.1 or SafeL2 1.4.1, only in the two-call batch shape.
+- Owner signatures for a Safe 1.4.1 or SafeL2 1.4.1, only in the three-call batch shape.
 - It keeps the same key across reboots and reflashes, as long as the slot layout stays the same.
 
 ### Checking blocks
@@ -350,7 +349,7 @@ reported as "unexplained" and blocks signing.
 
 Anything else with calldata is "blind signing" and is refused.
 
-### The built-in policy (demo, version 2)
+### The built-in policy (demo, version 3)
 
 | Rule | Value |
 |---|---|
@@ -359,7 +358,10 @@ Anything else with calldata is "blind signing" and is refused.
 | Assets with no limit | refused |
 | Largest network fee | 0.002 ETH |
 | Largest slippage | 3% |
-| Allowed addresses | SwapRouter02, WETH, `0x...dEaD`, DemoPayRouter, plus the sender itself |
+| May be called | SwapRouter02, WETH, DemoPayRouter |
+| May receive | `0x...dEaD`, plus the sender itself |
+| Swaps | one at a time, paid out to the sender |
+| Leftovers | a called contract may not keep funds |
 
 The board's own account and the Safes it co-signs for share one daily budget. An approval
 counts as spending its full amount.
@@ -387,28 +389,8 @@ not yet demonstrated.
 
 ### Serious
 
-**A. An allowed router can be used to give funds away.** *(Reproduced: the router behaviour on
-a Sepolia fork, the rules in a unit test with constructed effects.)*
-SwapRouter02 is on the allowlist, and the allowlist also approves recipients. A swap whose
-recipient is the router itself passes both the display check and the policy. The Safe gains
-nothing, so the slippage rule has nothing to compare and never runs. The output sits in the
-router, where anyone can take it with `sweepToken`. A fooled agent or a hostile host can lose
-up to the daily limit to an attacker this way.
-*Fix idea:* separate "may call" from "may receive", and refuse a swap with no gain to the sender.
-
-**B. A deposit can cancel out the postcondition.** *(Reproduced on a Sepolia fork.)*
-Floors are absolute balances. If money reaches the Safe after signing and before execution,
-the call can lose that much extra and still pass. In the test, a payment simulated to cost
-0.0001 ETH cost 0.0005 after a 0.0004 deposit.
-*Fix idea:* record balances at the start of the batch and check the change. This needs a new
-contract and new firmware.
-
-**C. Co-signatures don't expire, and failed transactions publish them.** *(Reproduced on a
-Sepolia fork.)*
-A reverted Safe transaction leaves both signatures visible on chain, and the nonce unused.
-Anyone can submit them again later. Together with B, that is dangerous after a top-up.
-*Fix:* after any reverted or abandoned co-signed transaction, execute another transaction
-with the same Safe nonce. *Longer term:* put a deadline in the postcondition.
+Holes A, B and C (a router as recipient, deposits absorbing losses, co-signatures that never
+expired) were fixed in policy v3 and contract v2. The letters below are kept.
 
 **D. The demo machine holds two of the three Safe keys.**
 The agent and recovery keys are both files in `.dabao-keys/`. Whoever can read that folder
@@ -451,17 +433,15 @@ are refused by the policy, so adding a mainnet policy without fixing this would 
 
 **M. The postcondition covers little.** It doesn't check approvals, NFTs, or tokens that
 neither moved nor have a limit. It also reverts exact-output swaps that cost slightly more
-than simulated.
-
-**N. Slippage allowance is added per field.** Several shown minimums of the same token each
-lower the floor, so together they can lower it too far.
+than simulated. And Safe swaps don't fit on the board yet: about 158 KB of witness against a
+140 KiB limit.
 
 **O. A Safe is recognised by storage alone.** Any contract can copy that layout. Such a
 signature is useless on a real Safe, but it uses up the daily budget. A hostile host can use
 up the budget anyway by requesting signatures it never sends.
 
-**P. The MCP server can misreport.** If the host command fails after broadcasting (for
-example, a receipt timeout), the agent is told "Nothing was executed", which may be false.
+**P. The MCP server reads text.** It decides the status from the host's printed output, so
+rewording a message can change what the agent is told.
 
 **Q. A crash wedges the board.** If the verifier runs out of memory or panics, you must press
 reset.
@@ -557,7 +537,7 @@ Inside `main.rs`:
 | File | What it does |
 |---|---|
 | `crates/signer/Cargo.toml` | Package file. |
-| `crates/signer/src/main.rs` | Waits for a job, builds the hash, signs. For a Safe it signs only a DELEGATECALL to MultiSendCallOnly with two calls, the second to the postcondition. |
+| `crates/signer/src/main.rs` | Waits for a job, builds the hash, signs. For a Safe it signs only a DELEGATECALL to MultiSendCallOnly with three calls: begin, the call, check. |
 | `crates/signer/src/store.rs` | Creates, saves and loads the key. It writes the key first and a checksum header last. It never replaces a key it failed to read. **Don't change the slot layout: you would lose the account.** |
 
 ### 7.6 `crates/xous-evm`: running transactions
@@ -571,7 +551,7 @@ No Xous code here, so it also runs on a laptop.
 | `crates/xous-evm/src/chainspec.rs` | Mainnet and Sepolia fork rules, without the 690 KB genesis file. |
 | `crates/xous-evm/src/sim.rs` | The simulator. `WitnessDb` gives revm proven state only. `simulate_then` runs the transaction, then allows follow-up calls on the resulting state. |
 | `crates/xous-evm/src/effects.rs` | Turns logs and changes into effects, works out the sender's net per asset, and flags unexplained storage. Has its own unit tests. |
-| `crates/xous-evm/src/postcondition.rs` | Picks the assets, computes the floors, tests the check, builds the two-call batch. |
+| `crates/xous-evm/src/postcondition.rs` | Picks the assets, computes the smallest allowed balance changes, sets the deadline, tests the check, builds the three-call batch. |
 | `crates/xous-evm/tests/forks.rs` | Prints which fork rules are picked now. It asserts nothing beyond not crashing. |
 | `crates/xous-evm/tests/sepolia.rs` | Replays five board-signed transactions and expects the on-chain gas and log counts. |
 | `crates/xous-evm/tests/swap.rs` | Checks that real mainnet swaps are fully explained. |
@@ -618,7 +598,7 @@ No Xous code here, so it also runs on a laptop.
 | `crates/policy/Cargo.toml` | Package file. |
 | `crates/policy/src/lib.rs` | The rule types, the 32-byte counter format, `evaluate` (the rules) and `describe` (prints them). |
 | `crates/policy/policy.bin` | Generated. The compiled policy. |
-| `crates/policy/tests/policy.rs` | Limits add up and reset daily, plus tests for the fee cap, slippage, allowlist and approvals. |
+| `crates/policy/tests/policy.rs` | Limits add up and reset daily, plus tests for the fee cap, slippage, address rules, router abuse and approvals. |
 
 ### 7.10 Test-only programs for the board
 
@@ -662,9 +642,9 @@ No Xous code here, so it also runs on a laptop.
 |---|---|
 | `contracts/foundry.toml` | Fixed compiler settings, so the code and therefore the addresses come out the same. |
 | `contracts/.gitignore` | Ignores Foundry's output. |
-| `contracts/src/DabaoPostcondition.sol` | `balances` reads balances. `check` reverts if a Safe setting changed or a balance is under its floor. |
+| `contracts/src/DabaoPostcondition.sol` | `begin` records balances, `check` reverts if one changed worse than allowed, a Safe setting changed or the deadline passed. `verify` is the same check for the board's simulation. |
 | `contracts/src/DemoPayRouter.sol` | A demo payment router whose owner can make it keep the change. Never use it for real. |
-| `contracts/test/Postcondition.t.sol` | Four tests on a fork of Sepolia. |
+| `contracts/test/Postcondition.t.sol` | Eight tests on a fork of Sepolia. |
 
 ### 7.14 `descriptors` and `policy`: the settings you edit
 
@@ -772,7 +752,7 @@ Bodies are RLP, Ethereum's simple binary format. The device is USB `1d50:6197`, 
 | Demo Safe | `0x265871a72567419AE2f799a1288271C09B589fd9` |
 | Agent owner | `0x124beF9dDa9D1B6F7D2D6522459448970301A515` |
 | Recovery owner | `0x6a657Ba092207e2836c5B53Fa36d808794556250` |
-| DabaoPostcondition | `0xf864caDe5938aB798D69e07002445C7A068b310F` |
+| DabaoPostcondition | `0x0435e385AA3BAA0D9D782458DC3B10621702b26D` |
 | DemoPayRouter | `0x1ab73Bb30Da0a020bDa2F942F524F3CA75ab5Fc7` |
 | MultiSendCallOnly 1.4.1 | `0x9641d764fc13c8B624c04430C7356C1C7C8102e2` |
 | SwapRouter02 | `0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E` |
@@ -906,7 +886,7 @@ Options for `safe send`:
 | `--local` | Run the board's checks on the computer. Nothing is signed. Still asks the board for its address. |
 | `--agent-only` | Show that the agent alone can't execute. Sends nothing. |
 | `--before-exec CMD` | Run a shell command between signing and executing (for demos). |
-| `--force` | Execute even if the pre-flight fails. **This publishes reusable signatures: see hole C.** |
+| `--force` | Execute even if the pre-flight fails. **This publishes the signatures. They work until the 10-minute deadline.** |
 
 ### The agent wallet
 
@@ -931,8 +911,8 @@ demo/postcondition/run.sh          # router changes its mind: reverts on chain
 ```
 
 The postcondition demo needs the original router owner's key. Its failing case publishes
-reusable signatures (hole C), so run the honest case right after it to use up that nonce. Wait
-a minute first, so that the light client has seen the router switch back.
+signatures that work for up to 10 minutes. Before running the honest case afterwards, wait a
+minute, so that the light client has seen the router switch back (until then it is refused).
 
 ### Without a board: the emulator
 
@@ -988,7 +968,7 @@ owner of the demo Safe. It doesn't enforce the board's memory limits.
 
 ## 11. How to test
 
-### On the computer (52 tests)
+### On the computer (56 tests)
 
 ```sh
 cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp
@@ -996,7 +976,7 @@ cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-cl
 
 Name the packages like this. Some crates in the workspace are board programs.
 
-### Contracts (4 tests, uses a Sepolia fork)
+### Contracts (8 tests, uses a Sepolia fork)
 
 ```sh
 cd contracts
@@ -1036,7 +1016,7 @@ Flash as usual and read the console.
 
 ## 12. How to change things
 
-### Change a limit, the allowlist or a cap
+### Change a limit, an address list or a cap
 
 1. Edit `policy/policy.json`. Amounts are whole units. Change `id` so you can recognise it.
 2. `scripts/compile-descriptors.sh`
@@ -1044,8 +1024,8 @@ Flash as usual and read the console.
 4. `scripts/build-device.sh`, flash `xous.uf2`, check with `dabao-host policy`.
 
 Two traps. **Reordering or inserting limits resets today's counters**, because counters are
-stored by position. And **every allowlisted address can also receive funds** (hole A), so
-think before adding a contract.
+stored by position. And **never put a router in `recipients`**: anyone can sweep what
+lands there. Contracts you only call go in `contracts`.
 
 ### Support a new contract
 
@@ -1053,7 +1033,7 @@ think before adding a contract.
    names. `includes`, `$ref` and EIP-712 are not supported.
 2. Add the file to the list in `scripts/compile-descriptors.sh`.
 3. Add any new token to `descriptors/tokens.json`, after checking its decimals on chain.
-4. Add the contract to the allowlist, and a daily limit for any new asset it spends.
+4. Add the contract to `contracts`, and a daily limit for any new asset it spends.
 5. Compile, test, build, flash `xous.uf2`.
 
 If it is refused as "unexplained effect", it emits an event the board doesn't know. See below.
@@ -1143,14 +1123,16 @@ alone is unsafe.
 | `signed in period ...` | A hand-over happened. | `lc-sync` |
 | `HEADER NOT VERIFIED` from `send` | Saved requests have no proof. | Normal for simulation. They can't be signed. |
 | `blind signing refused` | No descriptor for that function. | Add one (part 12). |
-| `not on the allowlist` | The policy. | Intended, or change the policy and reflash. |
+| `not an allowed recipient`, `not an allowed contract to call` | The policy. | Intended, or change the policy and reflash. |
+| `keeps ...` | The called contract would hold on to funds, for example excess ETH in a router. | Send the exact amount. |
+| `Dabao: expired` | Over 10 minutes between signing and executing. | Sign again. |
 | `daily limit` | Budget used, possibly by unsent signatures. | Wait for the next UTC day. |
 | `policy counters unreadable` | A slot claim or read failed. | Reboot. Check that the image has the keystore change. |
 | `signer attached` never happens | The slot claim failed, or the key is unreadable. | Read the console or DUART log. Don't erase the slots. |
 | `MPT: unresolved node access` or `not in witness` | The witness lacks data the run needed. | Rebuild it on the same block. |
 | RPC refuses old proofs | The public node keeps recent state only. | Set `RPC_URL` to a node with a wider window. |
 | `GS020` | Too few signatures. | Expected for agent-only. |
-| `GS013` or pre-flight fails | A call in the batch failed, often the postcondition. | The state changed. Read hole C before forcing. |
+| `GS013` or pre-flight fails | A call in the batch failed, often the postcondition. | The state changed or the deadline passed. Sign again. |
 | Safe run uses slightly old state | The light client trails by a few blocks. | Wait a minute and retry. |
 | No logs on USB | HID images have no console. | Build with `GENERIC_HID=0`, or read the DUART pins PB13 and PB14. |
 | `target/SVD_PATH missing or empty` | An emulator build ran last. | Nothing. The build script repairs it. |

@@ -39,12 +39,14 @@ fn sign(key: &SigningKey, me: Address, job: &SignJob) -> Result<Vec<u8>, String>
     if job.kind == SignJob::SAFE_MULTISEND {
         // co-sign a Safe transaction: the SafeTx hash, computed here from the approved fields.
         // DELEGATECALL runs code as the Safe, so only to the pinned MultiSendCallOnly, with a
-        // batch of CALLs that ends in the postcondition.
+        // batch of exactly [begin, call, check].
         use sim_types::safe;
         let calls = safe::multisend_decode(&t.data).ok_or("not a MultiSendCallOnly batch of CALLs")?;
-        let ends_in_check = calls.last().is_some_and(|c| c.to == safe::POSTCONDITION && c.value.is_zero());
-        if t.to != safe::MULTISEND_CALL_ONLY || !t.value.is_zero() || calls.len() != 2 || !ends_in_check {
-            return Err("DELEGATECALL only to MultiSendCallOnly: [call, postcondition]".into());
+        let own = |c: &safe::Call, selector: [u8; 4]| c.to == safe::POSTCONDITION && c.value.is_zero() && c.data.starts_with(&selector);
+        let shaped = matches!(&calls[..], [begin, call, check]
+            if own(begin, safe::BEGIN_SELECTOR) && own(check, safe::CHECK_SELECTOR) && call.to != safe::POSTCONDITION && call.to != t.from);
+        if t.to != safe::MULTISEND_CALL_ONLY || !t.value.is_zero() || !shaped {
+            return Err("DELEGATECALL only to MultiSendCallOnly: [begin, call, check]".into());
         }
         let hash = safe::tx_hash_op(job.chain_id, t.from, t.to, t.value, &t.data, job.safe_nonce, 1);
         let sig = sign_hash(hash)?;

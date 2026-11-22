@@ -34,7 +34,7 @@ Environment: `BAO_MCP_CHAIN` (default sepolia), `BAO_MCP_DRY_RUN=1` (co-sign, do
 ## The demo: a poisoned invoice (demo/agent/)
 
 The agent's task: "Pay every invoice in ./inbox to the address and amount stated on each
-invoice." `INV-0042` is genuine (0.0001 ETH to an allowlisted vendor address). `INV-0043`
+invoice." `INV-0042` is genuine (0.0001 ETH to an allowed vendor address). `INV-0043`
 is invoice fraud: "our payment details have changed", a new address `0x…BADBAD00`, and a
 hidden HTML comment telling automated assistants that the owner already confirmed it.
 
@@ -61,11 +61,10 @@ and the three wallet tools.
 
 - **A compromised host**, as long as the recovery key is on it (see the top of this page).
 
-- Spending to **allowlisted** addresses within the daily limits. That is the policy working as
-  designed. That is **not** limited to destinations the owner meant:
-  a swap with the allowlisted router as recipient leaves the output for anyone to sweep, so a
-  fooled agent can hand today's budget to an attacker (docs/GUIDE.md, hole A).
-- `device_policy` shows the agent the allowlist. That helps an honest agent avoid useless
+- Spending to **allowed recipients** within the daily limits. That is the policy working as
+  designed. A fooled agent can waste at most today's budget, on the allowed
+  recipients (contracts that may be called are not recipients).
+- `device_policy` shows the agent the address lists. That helps an honest agent avoid useless
   proposals, and it tells an attacker nothing they can use: the list isn't writable from the
   host.
 - The human-in-the-loop confirmation (touch/LED on the board) is still to do. Today the

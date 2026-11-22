@@ -4,8 +4,10 @@
 //! * The policy is part of the firmware (compiled from `policy/policy.json` by
 //!   `dabao-host compile-policy`, embedded here), so a compromised host can't replace it.
 //! * Rules, per chain: daily spending limits per asset (counters persisted in RRAM), a cap on
-//!   the network fee, a cap on swap slippage, an address allowlist, and what to do with assets
-//!   that have no limit. A chain without a policy is refused.
+//!   the network fee, a cap on swap slippage, which contracts may be called, who may receive,
+//!   and what to do with assets that have no limit. A chain without a policy is refused.
+//! * Being callable is not being a recipient: anyone can sweep what is left in a router. Swaps
+//!   must pay out to the sender, and a called contract must not keep funds.
 //! * "Spending" is what the simulation says leaves the sender: net losses per asset, plus every
 //!   allowance the sender grants (at its full amount: an allowance is spending authority), plus
 //!   the maximum network fee for ETH. Measured from effects, not from calldata, so a router or
@@ -22,7 +24,7 @@ use clear_sign::{
 };
 use sim_types::{PolicyCheck, SimInput, SimResult, effect};
 
-pub const POLICY_VERSION: u64 = 1;
+pub const POLICY_VERSION: u64 = 2;
 /// Counters available (keystore app slots claimed by the verifier).
 pub const MAX_LIMITS: usize = 32;
 /// `max_slippage_bps` meaning "no limit".
@@ -42,8 +44,10 @@ pub struct ChainPolicy {
     pub max_fee: U256,
     /// Max of (simulated - shown minimum) / simulated, basis points (10000 = no limit).
     pub max_slippage_bps: u64,
-    /// Non-empty: `tx.to` and every address the user is shown must be on it (or the device).
-    pub allowlist: Vec<Address>,
+    /// May be called with calldata, and may be given allowances. Not recipients.
+    pub contracts: Vec<Address>,
+    /// May receive funds (as may the sender itself). Both lists empty: no address rules.
+    pub recipients: Vec<Address>,
     /// Allow spending assets that have no daily limit (else refused).
     pub allow_unlimited_assets: bool,
     pub limits: Vec<Limit>,
@@ -155,17 +159,73 @@ pub fn evaluate(p: &Policy, counters: &[Counter], tokens: &DescriptorSet, input:
         v.push(format!("max network fee {} exceeds the policy's {}", amt(Address::ZERO, max_fee), amt(Address::ZERO, cp.max_fee)));
     }
 
-    // allowlist
-    if !cp.allowlist.is_empty() {
-        let ok = |a: &Address| *a == me || cp.allowlist.contains(a);
-        if !ok(&tx.to) {
-            v.push(format!("{} is not on the allowlist", tx.to));
+    // who may be called, and who may receive
+    let swapped = sim.effects.iter().any(|e| e.kind == effect::POOL_SWAP);
+    if !cp.contracts.is_empty() || !cp.recipients.is_empty() {
+        let receives = |a: &Address| *a == me || cp.recipients.contains(a);
+        // a callable contract may be named as a spender, if nothing is also sent to it
+        let spender = |a: &Address| {
+            cp.contracts.contains(a)
+                && sim.effects.iter().any(|e| matches!(e.kind, effect::ERC20_APPROVAL | effect::PERMIT2_APPROVAL) && e.from == me && e.to == *a)
+                && !sim.effects.iter().any(|e| e.kind == effect::ERC20_TRANSFER && e.to == *a)
+        };
+        if tx.data.is_empty() {
+            if !receives(&tx.to) {
+                v.push(format!("{} is not an allowed recipient", tx.to));
+            }
+        } else if !cp.contracts.contains(&tx.to) {
+            v.push(format!("{} is not an allowed contract to call", tx.to));
         }
         let mut seen = Vec::new();
         for a in &sim.clear_sign.addresses {
-            if !ok(a) && *a != tx.to && !seen.contains(a) {
-                v.push(format!("shown address {a} is not on the allowlist"));
+            if tx.data.is_empty() && *a == tx.to {
+                continue; // judged above
+            }
+            if !receives(a) && !spender(a) && !seen.contains(a) {
+                v.push(format!("shown address {a} is not an allowed recipient"));
                 seen.push(*a);
+            }
+        }
+    }
+
+    // swaps: one at a time and paid out to the sender, or the slippage rule has nothing to check
+    if swapped {
+        if sim.clear_sign.addresses != [me] {
+            v.push("a swap must be a single swap whose only recipient is the sender".into());
+        }
+        if !sim.effects.iter().any(|e| e.kind == effect::NET_GAIN && e.from == me) {
+            v.push("a swap must leave the sender with a gain to check slippage against".into());
+        }
+    }
+
+    // a called contract must not keep funds (anyone can sweep a router); wrapping is the exception
+    if !tx.data.is_empty() && tx.to != me {
+        let wraps = sim.effects.iter().any(|e| e.kind == effect::WRAP && e.contract == tx.to);
+        let mut kept: Vec<(Address, U256, U256)> = Vec::new(); // asset, received, sent on
+        let mut tally = |asset: Address, got: U256, sent: U256| match kept.iter_mut().find(|k| k.0 == asset) {
+            Some(k) => (k.1, k.2) = (k.1.saturating_add(got), k.2.saturating_add(sent)),
+            None => kept.push((asset, got, sent)),
+        };
+        let none = U256::ZERO;
+        for e in &sim.effects {
+            match e.kind {
+                effect::NATIVE_IN if e.to == tx.to && !wraps => tally(Address::ZERO, e.amount, none),
+                effect::ERC20_TRANSFER => {
+                    if e.to == tx.to {
+                        tally(e.contract, e.amount, none);
+                    }
+                    if e.from == tx.to {
+                        tally(e.contract, none, e.amount);
+                    }
+                }
+                effect::WRAP if e.to == tx.to => tally(e.contract, e.amount, none),
+                effect::UNWRAP if e.from == tx.to => tally(e.contract, none, e.amount),
+                _ => {}
+            }
+        }
+        for (asset, got, sent) in kept {
+            if got > sent {
+                v.push(format!("the called contract {} keeps {}", tx.to, amt(asset, got - sent)));
             }
         }
     }
@@ -183,6 +243,20 @@ pub fn evaluate(p: &Policy, counters: &[Counter], tokens: &DescriptorSet, input:
                 amt(m.asset, m.simulated),
                 cp.max_slippage_bps
             ));
+        }
+    }
+
+    if swapped && cp.max_slippage_bps < NO_SLIPPAGE_LIMIT {
+        for m in &sim.clear_sign.max_spend {
+            let bps = m.shown.saturating_sub(m.simulated).saturating_mul(U256::from(10_000)) / m.shown.max(U256::from(1));
+            if bps > U256::from(cp.max_slippage_bps) {
+                v.push(format!(
+                    "slippage: maximum {} is {bps} bps above the simulated {} (policy max {} bps)",
+                    amt(m.asset, m.shown),
+                    amt(m.asset, m.simulated),
+                    cp.max_slippage_bps
+                ));
+            }
         }
     }
 
@@ -246,15 +320,18 @@ pub fn describe(p: &Policy, counters: &[Counter], tokens: &DescriptorSet) -> Vec
     for cp in &p.chains {
         let amt = |a: Address, x: U256| format_amount(tokens, cp.chain_id, a, x);
         out.push(format!(
-            "chain {}: max network fee {}; max slippage {}; allowlist {}; assets without a limit {}",
+            "chain {}: max network fee {}; max slippage {}; addresses: {}; assets without a limit {}",
             cp.chain_id,
             if cp.max_fee.is_zero() { "none".into() } else { amt(Address::ZERO, cp.max_fee) },
             if cp.max_slippage_bps >= NO_SLIPPAGE_LIMIT { "none".into() } else { format!("{} bps", cp.max_slippage_bps) },
-            if cp.allowlist.is_empty() { "off".into() } else { format!("{} addresses", cp.allowlist.len()) },
+            if cp.contracts.is_empty() && cp.recipients.is_empty() { "off".into() } else { format!("{} contracts, {} recipients", cp.contracts.len(), cp.recipients.len()) },
             if cp.allow_unlimited_assets { "allowed" } else { "refused" }
         ));
-        for a in &cp.allowlist {
-            out.push(format!("  allow {a}"));
+        for a in &cp.contracts {
+            out.push(format!("  may call    {a}"));
+        }
+        for a in &cp.recipients {
+            out.push(format!("  may receive {a}"));
         }
         for (i, _, l) in p.limits().filter(|(_, c, _)| *c == cp.chain_id) {
             let k = counters.get(i).copied().unwrap_or_default();

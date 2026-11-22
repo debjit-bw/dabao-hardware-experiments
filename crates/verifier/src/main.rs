@@ -128,7 +128,7 @@ fn run_as(input: &[u8], counters: &Counters, lc: &lc::LightClient, safe_owner: O
     let res = xous_evm::sim::simulate_then(input, |_| {}, &opts, |r, reads, call| {
         // ERC-7730: what the user would be shown vs what the simulation did
         r.clear_sign = clear_sign::check(&DESCRIPTORS, inp.chain_id, &inp.tx, r.success, &r.effects);
-        // the device's own policy: limits, fee, slippage, allowlist
+        // the device's own policy: limits, fee, slippage, addresses
         let out = policy::evaluate(&POLICY, &counters.values, &DESCRIPTORS, &inp, r);
         r.policy = out.check;
         if !counters.ok() {
@@ -136,7 +136,7 @@ fn run_as(input: &[u8], counters: &Counters, lc: &lc::LightClient, safe_owner: O
         }
         let post = safe_owner.filter(|_| r.success && reads.slots.len() == 6).map(|device| {
             let threshold = reads.slots[1];
-            xous_evm::postcondition::build(r, &inp.tx, device, threshold, &reads.code_hashes, &limited, call)
+            xous_evm::postcondition::build(r, &inp.tx, device, threshold, inp.block.timestamp, &reads.code_hashes, &limited, call)
         });
         (out.updates, post)
     });
@@ -337,7 +337,7 @@ fn sign_request(raw: &[u8], signer: &SignerLink, counters: &mut Counters, lc: &m
     }
     let job = match (&safe_state, &post) {
         // the Safe nonce comes from the verified state, not from the host; the SafeTx is the
-        // DELEGATECALL to MultiSendCallOnly: [the simulated call, the postcondition]
+        // DELEGATECALL to MultiSendCallOnly: [begin, the simulated call, check]
         (Some(st), Some(p)) => {
             out.safe_data = p.safe_data.clone().into();
             let tx = sim_types::SimTx {
