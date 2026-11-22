@@ -6,17 +6,20 @@
 //! 3. revm executes the tx over a `Database` backed by that trie. Any account, slot or code
 //!    the witness doesn't cover is a database *error* (fail closed), never "empty".
 
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap};
 
 use alloy_consensus::Header;
 use alloy_primitives::{Address, B256, Bytes, U256, map::B256IndexMap};
 use alloy_rlp::Decodable;
 use revm::{
-    Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext,
+    Context, ExecuteCommitEvm, ExecuteEvm, MainContext,
     bytecode::Bytecode,
-    context::{BlockEnv, TxEnv},
+    context::{BlockEnv, Evm, TxEnv},
+    context_interface::local::FrameStack,
     database::CacheDB,
     database_interface::DatabaseRef,
+    handler::{EthFrame, EthPrecompiles, MainnetEvm, instructions::EthInstructions},
+    interpreter::interpreter::EthInterpreter,
     primitives::TxKind,
     state::AccountInfo,
 };
@@ -27,7 +30,9 @@ use tries::{StatelessTrie, WitnessDbError, zeth::SparseState};
 /// revm database over the verified trie. Mirrors `stateless`'s crate-private `WitnessDatabase`.
 struct WitnessDb<'a> {
     trie: &'a SparseState,
-    bytecode: B256IndexMap<Bytes>,
+    /// Each code is moved out when first asked for: `CacheDB` keeps the analysed copy, and the
+    /// board can't afford both. (Asked again, it would fail closed as "not in witness".)
+    bytecode: RefCell<B256IndexMap<Bytes>>,
     block_hashes: BTreeMap<u64, B256>,
 }
 
@@ -50,8 +55,9 @@ impl DatabaseRef for WitnessDb<'_> {
 
     fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         self.bytecode
-            .get(&code_hash)
-            .map(|c| Bytecode::new_raw(c.clone()))
+            .borrow_mut()
+            .swap_remove(&code_hash)
+            .map(Bytecode::new_raw)
             .ok_or_else(|| WitnessDbError::TrieWitness(format!("bytecode {code_hash} not in witness")))
     }
 
@@ -145,7 +151,7 @@ pub fn simulate_then<R>(
     }
     let db = CacheDB::new(WitnessDb {
         trie: &trie,
-        bytecode,
+        bytecode: RefCell::new(bytecode),
         block_hashes: BTreeMap::from([(parent.number, parent.hash_slow())]),
     });
 
@@ -176,7 +182,7 @@ pub fn simulate_then<R>(
         .build()
         .map_err(|e| format!("tx env: {e:?}"))?;
 
-    let mut evm = Context::mainnet()
+    let ctx = Context::mainnet()
         .with_db(db)
         .with_block(block)
         .modify_cfg_chained(|cfg| {
@@ -187,13 +193,21 @@ pub fn simulate_then<R>(
                 cfg.disable_nonce_check = true;
                 cfg.disable_base_fee = true;
             }
-        })
-        .build_mainnet();
+        });
+    // As `build_mainnet`, except the frame stack. That preallocates 8 call frames with a 32 KiB
+    // EVM stack each (256 KiB, an eighth of the board's RAM); replacing it afterwards still
+    // spikes. Empty, it allocates one per call depth actually reached.
+    let mut evm: MainnetEvm<_> = Evm {
+        ctx,
+        inspector: (),
+        instruction: EthInstructions::new_mainnet_with_spec(spec_id),
+        precompiles: EthPrecompiles::new(spec_id),
+        frame_stack: FrameStack::<EthFrame<EthInterpreter>>::new(),
+    };
     let out = evm.transact(tx).map_err(|e| format!("execution: {e:?}"))?;
-    let state = out.state.clone();
+    let state = out.state;
 
-    let mut changes: Vec<SimChange> = out
-        .state
+    let mut changes: Vec<SimChange> = state
         .iter()
         .filter(|(_, acc)| acc.is_touched())
         .map(|(addr, acc)| {
