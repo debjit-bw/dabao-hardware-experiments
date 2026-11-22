@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "dabao-wallet": { "command": "../../target/debug/bao-mcp" }
+  }
+}

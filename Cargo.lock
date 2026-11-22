@@ -1227,6 +1227,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bao-mcp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "bao1x-api"
 version = "0.1.4"
 dependencies = [

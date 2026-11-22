@@ -13,6 +13,7 @@ members = [
     "crates/signer",
     "crates/keystore-probe",
     "host/dabao-host",
+    "tools/bao-mcp",
 ]
 
 # Patches and profiles only take effect at the workspace root.

@@ -1,0 +1,9 @@
+[package]
+name = "bao-mcp"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "MCP server: lets an AI agent propose transactions to a 2-of-3 Safe that the Dabao co-signs only after its own checks"
+
+[dependencies]
+serde_json = "1"
