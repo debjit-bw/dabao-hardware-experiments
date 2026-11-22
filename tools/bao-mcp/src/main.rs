@@ -98,6 +98,9 @@ fn verdict_lines(out: &str) -> Vec<&str> {
                 || l.starts_with("WARNING")
                 || l.starts_with("REJECTED")
                 || l.starts_with("light client:")
+                || l.starts_with("pre-flight")
+                || l.starts_with("Safe balance >=")
+                || l.starts_with("NOT EXECUTED")
                 || l.starts_with("included in block")
                 || l.starts_with("agent executes")
                 || l.starts_with("https://")
@@ -125,8 +128,12 @@ fn propose(args: &Value) -> Result<(bool, String), String> {
     let (ok, out) = host(&a);
     let status = if out.contains("NOT CO-SIGNED") {
         "refused"
-    } else if out.contains("included in block") {
+    } else if out.contains("included in block") && out.contains("tx status true") {
         "executed"
+    } else if out.contains("included in block") {
+        "reverted"
+    } else if out.contains("NOT EXECUTED") {
+        "not executed (postcondition)"
     } else if ok && out.contains("device co-signed") {
         "co-signed (dry run: not executed)"
     } else {
@@ -142,6 +149,10 @@ fn propose(args: &Value) -> Result<(bool, String), String> {
                       do not retry with variations to get around it.",
         "executed" => "EXECUTED: the Dabao co-signed after its own simulation and checks, and the Safe executed the call.",
         "error" => "ERROR: the proposal did not reach a device verdict (see the log below). Nothing was executed.",
+        "reverted" => "REVERTED on chain: the Dabao co-signed, but at inclusion its on-chain postcondition failed (the state changed since the \
+                       simulation), so the Safe transaction reverted and the Safe's funds did not move.",
+        "not executed (postcondition)" => "NOT EXECUTED: the Dabao co-signed, but on the latest state its on-chain postcondition would fail \
+                       (the state changed since the simulation). Nothing was sent; the Safe's funds did not move.",
         _ => "CO-SIGNED by the Dabao (dry run: not executed).",
     };
     let mut text = format!("{head}\n\nstatus: {status}\n");
