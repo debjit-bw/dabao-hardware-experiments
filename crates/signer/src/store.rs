@@ -4,7 +4,7 @@
 //!   used once it is completely stored.
 //!
 //! Isolation (device): stock dabao keystore lets any process read any app slot. Our keystore
-//! patch (patches/xous-core-keystore-app-slot-claims.patch, docs/keystore-slot-claims.md) adds
+//! patch (vendor/xous-core top commit, docs/keystore-slot-claims.md) adds
 //! `AppKey::Claim`: the first process to claim a slot range owns it until reboot. The signer
 //! claims its two slots before touching them and refuses to run if the claim fails. The
 //! transport reads no host input until the signer is attached, so the claim always comes

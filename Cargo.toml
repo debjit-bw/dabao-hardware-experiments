@@ -21,7 +21,7 @@ members = [
 # Patches and profiles only take effect at the workspace root.
 [patch.crates-io]
 # Xous fork of getrandom (0.2.x). Relative to the repo root; assumes the default
-# submodule vendor/xous-core (scripts/setup-xous-core.sh).
+# submodule vendor/xous-core.
 getrandom = { path = "vendor/xous-core/imports/getrandom" }
 # as eth-burner: the transport's usb-bao1x (device builds) needs these
 usb-device = { git = "https://github.com/betrusted-io/usb-device.git", branch = "main" }

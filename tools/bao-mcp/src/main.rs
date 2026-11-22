@@ -1,5 +1,6 @@
 //! `bao-mcp`: an MCP server (stdio, newline-delimited JSON-RPC 2.0) that gives an AI agent a
-//! wallet it cannot drain.
+//! wallet in which the Dabao co-signs. (This holds only if the agent can't read the Safe's
+//! other owner keys: see docs/agent-wallet.md.)
 //!
 //! The agent's wallet is a 2-of-3 Safe (docs/safe-cosigner.md). The agent's own key is one
 //! owner; the Dabao is another. The agent gets exactly one way to move funds: `propose_tx`.

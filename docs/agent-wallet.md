@@ -1,4 +1,8 @@
-# Agent wallet: an AI agent with a Safe it cannot drain
+# Agent wallet: an AI agent proposes, the board co-signs
+
+> **This holds only if the agent can't read the recovery key.** In the demo both the agent and
+> recovery keys are in `.dabao-keys/` on one machine: 2 of 3 signatures. An agent with a shell
+> or file access there, or anyone who controls the machine, can bypass the board entirely.
 
 `tools/bao-mcp` is an MCP server that gives an AI agent (Claude Code, or any MCP client) one
 way to move funds: `propose_tx`. The wallet is the 2-of-3 Safe from docs/safe-cosigner.md
@@ -42,12 +46,20 @@ Three layers, each shown working on the board (Sepolia, 2026-11-22):
 | 2. the device, when the agent is fooled | `demo/agent/compromised.sh` step 1: the agent proposes exactly what the invoice asks, through the same tool | **refused on the device**: `0x…badbad00 is not on the allowlist`; nothing signed |
 | 3. the Safe, when the attacker has the agent's key | `compromised.sh` step 2: execTransaction with the agent's signature alone | the Safe reverts `GS020` (eth_call; nothing sent) |
 
-Layer 1 is the one that varies: a stronger injection, a weaker model or a compromised agent
-host can defeat it. Layers 2 and 3 don't depend on any model. We did not tune the injection
+Layer 1 is the one that varies: a stronger injection or a weaker model can defeat it. Layers 2
+and 3 don't depend on any model, but they do depend on the attacker not having the recovery
+key, so they do **not** cover a compromise of this demo's host. We did not tune the injection
 until a model fell for it. Layer 2 is shown with a scripted agent instead, which is the
 honest way to show it.
 
+These runs predate two changes: the postcondition wrapping, and the confinement of the demo
+agent. When they ran, `run.sh` also let the agent read files outside the inbox, key files
+included, and offered it a shell. It now gives the agent only `Read`/`Glob` inside `demo/agent`
+and the three wallet tools.
+
 ## What it does not stop
+
+- **A compromised host**, as long as the recovery key is on it (see the top of this page).
 
 - Spending to **allowlisted** addresses within the daily limits. That is the policy working as
   designed. A fooled agent can waste at most today's budget, on destinations the owner chose.

@@ -70,11 +70,13 @@ dabao-host safe info
 
 ## Limits / next
 
-- **Gap between simulation and inclusion: closed** by the on-chain postcondition
+- **Gap between simulation and inclusion: narrowed** by the on-chain postcondition
   (docs/postcondition.md). The device co-signs only a DELEGATECALL to MultiSendCallOnly with
   [the call, `DabaoPostcondition.check(...)`], which reverts the Safe transaction unless the
-  Safe's balances and configuration still match the simulation at inclusion.
+  Safe's tracked balances and checked settings hold at inclusion. Approvals and other assets
+  are not checked.
 - The agent + recovery keys can execute without the device. That's intended (the human
-  override), but it means the recovery key must really be kept offline.
+  override), but it means the recovery key must really be kept offline. **In the demo it isn't**: it sits
+  next to the agent key, so that machine alone can spend from the Safe.
 - The parent header is proven canonical by the light client (docs/light-client.md), the same
   as for the device's own transactions.

@@ -1,28 +1,28 @@
-# Dabao: an Ethereum signer that verifies before it signs
+# Dabao: an Ethereum signer that checks before it signs
 
-A hardware signer on the Baochip Dabao (Baochip-1x, Xous) that refuses to sign what it hasn't
-checked itself. Before every signature it:
+A signer for the Baochip Dabao (Baochip-1x, Xous). Before every signature, the board:
 
-1. **gets a trusted state root**: a light client on the chip verifies the Ethereum sync
-   committee's BLS signature over the parent block (docs/light-client.md);
+1. **gets a trusted state root**: a light client on the chip verifies the sync committee's BLS
+   signature over the parent block (docs/light-client.md);
 2. **simulates the transaction** on state proven against that root (Merkle proofs, revm);
-   anything the witness doesn't prove fails closed (docs/effects-inspector.md);
-3. **checks that the user sees what it does**: every effect (transfers, approvals, swaps,
-   ownership changes) must be explained by an ERC-7730 field on the display
+   missing state fails closed (docs/effects-inspector.md);
+3. **checks that every effect it recognises is explained** by an ERC-7730 field
    (docs/clear-signing.md);
-4. **applies the owner's policy**: daily limits kept in RRAM, an allowlist, fee and slippage
-   caps, compiled into the firmware (docs/policy.md);
-5. **signs a digest it built itself**, in a separate MMU-isolated process whose key no other
-   process can read (docs/keystore-slot-claims.md).
+4. **applies the owner's policy**: daily limits in RRAM, an allowlist, fee and slippage caps,
+   compiled into the firmware (docs/policy.md);
+5. **signs a digest it built itself**, in a separate process. A keystore patch denies that
+   process's key slots to other processes (docs/keystore-slot-claims.md).
 
-On top of that it is the hardware **co-signer of a 2-of-3 Safe** for an AI agent
-(docs/safe-cosigner.md, docs/agent-wallet.md). The agent proposes through an MCP server; the
-device simulates as the Safe and co-signs only a batch that ends in an **on-chain
-postcondition**, so the transaction reverts if the state changes before inclusion
-(docs/postcondition.md).
+**The board has no display and no confirmation button yet.** The host prints what would be
+shown, and the host is untrusted, so today the policy in the firmware is the only approval.
 
-Everything above runs on the board and has been exercised on Sepolia; PROGRESS.md logs each
-milestone with measurements and transaction links.
+The board can also **co-sign for a 2-of-3 Safe** used by an AI agent (docs/safe-cosigner.md,
+docs/agent-wallet.md). It co-signs only a batch that ends in an **on-chain postcondition**,
+which reverts if tracked balances or the checked Safe settings are worse at inclusion than in
+the simulation (docs/postcondition.md).
+
+This is a hackathon prototype, tested on Sepolia with tiny amounts and not audited. Each doc
+has measurements, transaction links and limits. Don't put real funds behind it.
 
 ## Layout
 
@@ -37,32 +37,34 @@ crates/policy        signing policy;     policy/       the policy compiled into 
 crates/sim-types     wire format, Safe and MultiSend encoding
 contracts/           DabaoPostcondition (on-chain check), DemoPayRouter (demo); foundry
 host/dabao-host      host companion: witness building (eth_getProof), light-client sync, Safe flow
-tools/bao-mcp        MCP server: an agent's wallet that only the device can co-sign
+tools/bao-mcp        MCP server: lets an agent propose Safe transactions to the board
 demo/                agent (poisoned invoice) and postcondition demos
-patches/             our changes to xous-core (applied on the pinned submodule)
-vendor/xous-core     submodule: xous-core, pinned
+vendor/xous-core     submodule: xous-core fork (two commits on upstream)
 ```
 
 ## Build from source
 
-Requirements: macOS or Linux, Rust **1.100.0** (stable), and the Xous target sysroot.
+Requirements: Rust **1.100.0** and the Xous sysroot for that version. Tested on macOS (Apple
+silicon) only.
 
 ```sh
-git clone --recursive <this repo> && cd dabao-hackathon
-scripts/setup-xous-core.sh            # pinned xous-core + patches/ (idempotent)
-(cd vendor/xous-core && cargo xtask install-toolkit)   # Xous sysroot for riscv32imac-unknown-xous-elf
+git clone --recursive <this repo> dabao-hackathon && cd dabao-hackathon
+rustup default 1.100.0
+(cd vendor/xous-core && cargo xtask install-toolkit)   # Xous sysroot
 
-cargo test -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp
+cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp
 scripts/build-device.sh               # -> vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{loader,xous,apps}.uf2
-scripts/run-emu.sh                    # or: the whole system under hosted Xous, on TCP 127.0.0.1:7610
 ```
 
-`vendor/xous-core` is debjit-bw/xous-core at `36861b013`: btchip/xous-core `devcon8-workshop`
-plus the Rust 1.100 `SVD_PATH` fix (upstream betrusted-io/xous-core#1023, backport PR
-btchip/xous-core#1). `scripts/setup-xous-core.sh` adds the keystore app-slot claim patch
-(patches/README.md). A clean build from the submodule takes ~1.5 min and produces images of exactly the flashed sizes. They are not bit-identical to a build from another checkout path (paths end up in the binaries), so the build is reproducible from source but not bit for bit. The descriptors and the policy are compiled into the firmware from
-`descriptors/` and `policy/` by `scripts/compile-descriptors.sh`; the compiled blobs are checked
-in.
+`vendor/xous-core` is the `dabao-hackathon` branch of debjit-bw/xous-core: btchip/xous-core
+`devcon8-workshop` at `d1d4b9bca` plus two commits, which `git -C vendor/xous-core log -p -2`
+shows in full:
+
+- the Rust 1.100 `SVD_PATH` fix (betrusted-io/xous-core#1023, backported in btchip/xous-core#1);
+- per-boot keystore app-slot claims (docs/keystore-slot-claims.md).
+
+Builds are not bit-for-bit reproducible across checkout paths. The descriptors and the policy
+are compiled into the firmware by `scripts/compile-descriptors.sh`; the blobs are checked in.
 
 **Warning:** the first self-built image puts a Dabao into developer mode and permanently erases
 its factory secrets. `scripts/board-audit.py` audits the boot chain first.
@@ -85,7 +87,22 @@ demo/postcondition/run.sh             # state changes between co-signing and exe
 
 ## Status and limits
 
-See PROGRESS.md for the log and each doc's "Limits" section. In short: there's no
-on-device confirmation button yet (waiting for hardware). The light client trusts the sync
-committee (the standard light-client assumption) and can't know a header is the very newest.
-The postcondition checks balances and the Safe's configuration, not allowances.
+- **No trusted display, no on-device confirmation.**
+- **The host chooses part of the simulated block**: base fee, gas limit, beneficiary and
+  prevrandao aren't checked against the proven parent, so a contract that reads them can
+  behave differently in the simulation.
+- **The light client is Sepolia-only and its proof isn't bound to the request's chain id.**
+  Other chains are refused by the built-in policy, not by the proof.
+- **The light client follows optimistic (unfinalized) headers**, trusts 2/3 of the sync
+  committee and can't know that a header is the newest.
+- **The postcondition checks only the tracked balances and some Safe settings.** It doesn't
+  check approvals, NFTs or other assets.
+- **The demo Safe's agent and recovery keys are files on the same machine.** Whoever controls
+  that machine has 2 of 3 signatures and doesn't need the board. A real deployment must keep
+  the recovery key elsewhere.
+
+## License
+
+MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your
+option. `vendor/xous-core` and files copied from other projects (the registry descriptors,
+test fixtures) keep their own licenses.

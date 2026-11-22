@@ -12,7 +12,8 @@
 //!
 //! `floors` = the Safe's simulated post-balance of each asset, minus the slippage the user was
 //! shown for that asset (the simulated output minus the shown minimum). So at inclusion the
-//! Safe may end up with more than simulated, or with the shown minimum, but never with less.
+//! Safe may end up with more than simulated, or with the shown minimum, but not with less of
+//! the assets checked here. Other assets and approvals are not checked.
 //! If not, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0).
 //!
 //! Assets checked: ETH, every asset the policy limits on this chain, and every token the

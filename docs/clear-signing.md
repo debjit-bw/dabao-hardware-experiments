@@ -67,7 +67,12 @@ a multicall; a revert.
 On chain (Sepolia, signed by the Dabao, receipts identical to the device's prediction): plain ETH
 transfers, WETH wrap and transfer (our WETH descriptor), and two Uniswap swaps through
 SwapRouter02 — `exactInputSingle` and `multicall(deadline, [exactInputSingle])` — clear-signed
-with the registry's formats (Sepolia `context`). See PROGRESS.md for the transaction links.
+with the registry's formats (Sepolia `context`). Swaps:
+[exactInputSingle](https://sepolia.etherscan.io/tx/0xffab26994b6096a1fda6315e2c6d653733e3051e82bdf442a2d055811550d716),
+[multicall](https://sepolia.etherscan.io/tx/0x4148ce5b1a520f0ff8a09f906c871dfe1300824889b9723b14d8831957dde1ad).
+
+There is no display on the board: "shown" below and above means what the board computes for
+display. Today the untrusted host prints it.
 
 ## Limits / next
 

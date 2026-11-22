@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gap between simulation and inclusion, closed by the device's on-chain postcondition.
+# A change between simulation and inclusion, caught by the device's on-chain postcondition.
 #
 # DemoPayRouter.pay(to, amount) forwards `amount` and refunds the change, unless its owner has
 # switched on keepChange (contracts/src/DemoPayRouter.sol; the owner is played by the agent key).

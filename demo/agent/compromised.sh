@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The agent demo, part 2: assume the agent DID fall for INV-0043 (a weaker model, a subtler
-# injection, or a compromised agent host). Model judgement is gone; what is left?
+# The agent demo, part 2: assume the agent DID fall for INV-0043 (a weaker model or a subtler
+# injection). Model judgement is gone; what is left? This does NOT model a compromised host:
+# the demo keeps the recovery key here too, which is 2 of 3 without the board.
 #
 #   1. the compromised agent proposes exactly what the poisoned invoice asks for, through
 #      bao-mcp, the same tool the honest agent uses  -> the Dabao refuses on the device

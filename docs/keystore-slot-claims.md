@@ -32,8 +32,8 @@ slot 160. Isolation that the attacker can step around by asking politely isn't i
 
 ## Design (option "A1": first claim wins, per boot)
 
-New keystore request `AppKey::Claim { guard, start, len }` (patch:
-`patches/xous-core-keystore-app-slot-claims.patch`):
+New keystore request `AppKey::Claim { guard, start, len }` (the top commit
+of the `vendor/xous-core` submodule):
 
 - The keystore keeps an in-RAM table of `(slot range, owner PID)`, empty at every boot.
 - **Claim** of a range succeeds if it doesn't overlap any claimed range, or if it is exactly a
@@ -107,10 +107,8 @@ Build and run:
 GENERIC_HID=0 scripts/build-device.sh target/riscv32imac-unknown-xous-elf/release/keystore-probe
 # press RESET on the board, then:
 PYTHON=<python with pyserial, progressbar2> scripts/flash-and-log.py --until "PROBE summary" \
-    $XOUS_CORE/target/riscv32imac-unknown-xous-elf/release/{xous,apps}.uf2
+    vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{xous,apps}.uf2
 ```
-
-Results are recorded in `PROGRESS.md`.
 
 ## Results (board, 2026-11-21)
 

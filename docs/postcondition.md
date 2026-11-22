@@ -1,4 +1,4 @@
-# On-chain postcondition: closing the gap between simulation and inclusion
+# On-chain postcondition: narrowing the gap between simulation and inclusion
 
 The device simulates a Safe call on a block the light client proved. The agent executes it
 later, on whatever state is current then. Anything the call depends on can change in
@@ -19,8 +19,9 @@ MultiSendCallOnly 1.4.1** with two CALLs from the Safe:
   from the Safe), the Safe's balance is at least its **simulated post-balance minus the
   slippage the user was shown** (the simulated output minus the shown minimum).
 
-If `check` reverts, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0). The
-Safe can end up *better* than simulated, never worse.
+If `check` reverts, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0). For
+the **tracked balances and checked settings** the Safe ends no worse than that. Nothing else
+is covered: see Limits.
 
 ## Why it can be trusted
 
@@ -37,8 +38,8 @@ postcondition asserts, compares the SafeTx hash with the Safe's own `getTransact
 context on the latest state, no signatures needed).
 
 A useful side effect: a co-signed SafeTx stays valid until its nonce is used, for example
-after a revert. With the postcondition, executing it later is safe whenever it happens. It
-either does what was shown, or nothing.
+after a revert. Executing it later still runs the check, so the tracked balances keep their floors.
+What isn't checked (approvals, untracked assets) can differ from what was simulated.
 
 ## On the board (Sepolia, 2026-11-22)
 
@@ -50,7 +51,7 @@ contract whose behaviour can still change would.
 | Case | Result |
 |---|---|
 | Safe → 0.0001 ETH to 0x…dEaD, wrapped | co-signed; floor "Safe ≥ 0.00139 ETH"; [executed](https://sepolia.etherscan.io/tx/0xc6508b507b7a81a7279aa043d932fadcd7043578fe914a1eb7440b42e87d4ff8), logs identical. Same SafeTx hash as the host's `--local` run of the same pipeline |
-| Safe pays 0.0001 through the router (sends 0.0005, 0.0004 change), and the router's owner switches `keepChange` on **after the device co-signed** (`demo/postcondition/run.sh`) | floor "Safe ≥ 0.00129 ETH". The agent executes anyway (`--force`): **[reverted on chain](https://sepolia.etherscan.io/tx/0xfc14899229365f302888ffcbd471214ee46d96d35dbb52aff638e4a1b5f878df)**, the Safe kept all 0.00139 ETH (without the postcondition it would have lost 0.0005) |
+| Safe pays 0.0001 through the router (sends 0.0005, 0.0004 change), and the router's owner switches `keepChange` on **after the device co-signed** (`demo/postcondition/run.sh`) | floor "Safe ≥ 0.00129 ETH". The agent executes anyway (`--force`): **[reverted on chain](https://sepolia.etherscan.io/tx/0xfc14899229365f302888ffcbd471214ee46d96d35dbb52aff638e4a1b5f878df)**, the Safe kept all 0.00139 ETH (by calculation, without the postcondition it would have paid 0.0005; that case was not run) |
 | the same, by accident a second time (a stray run of the script) | [reverted](https://sepolia.etherscan.io/tx/0x3e573dd9b66374ced179275e5810584856538310bbe9e8df73159e7367f58874); the Safe lost nothing |
 | the honest router payment (`run.sh honest`) | co-signed, [executed](https://sepolia.etherscan.io/tx/0x64726b33951c06efb71ca981f229259771c4175fd5ee752b9d79a3e1776431d2). The proven parent block was still from before the switch-back, so the device simulated (and showed, and counted) the 0.0005 cost. At inclusion the router refunded the change, so the Safe ended above the floor, which the postcondition allows |
 
@@ -63,6 +64,9 @@ buffer copy).
 
 ## Limits
 
+- **Untracked assets aren't asserted.** A token the simulation didn't move and the policy
+  doesn't list, NFTs and ERC-1155s can change at inclusion without failing the check.
+- **Slippage floors haven't been exercised through the Safe on the board**, only ETH floors.
 - **Allowances aren't asserted.** An approval the call grants is counted by the policy at its
   full amount, but `check` only looks at balances.
 - **Strict for exact-output trades.** The floor uses the simulated loss. A swap whose input
@@ -70,5 +74,5 @@ buffer copy).
   within the shown maximum. That's fail-safe, not fail-open.
 - **The light client trails the head by a few blocks.** A Safe transaction simulated right
   after a state change can be simulated on the state before it (row 4). The postcondition
-  makes that safe; it can only make the result stricter.
+  still enforces the floors computed on that older state.
 - **Gas.** The batch costs ~30–40k gas more, paid by the executor.

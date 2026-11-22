@@ -67,8 +67,11 @@ extra participant and < 2/3 participation all fail.
 - **"Latest" is relative.** The device has no clock, so it knows a header is real and not older
   than one it already used, not that it is the newest. The ratchet only advances when
   something is signed. Within that window, a stale state shows up as an invalid nonce or, for
-  anything else, is the same gap as simulation-to-inclusion (planned: an on-chain
-  postcondition in the Safe flow).
+  anything else, is the same gap as simulation-to-inclusion (narrowed for Safe
+  transactions by docs/postcondition.md).
+- **Only the parent header, the block number and the timestamp are checked.** The simulated
+  block's base fee, gas limit, beneficiary and prevrandao come from the host, and the request's
+  chain id isn't bound to this Sepolia proof (the policy refuses other chains).
 - Hand-offs are accepted with 2/3 participation on any signed header in the period. The spec
   also tracks finality for this; we rely on the supermajority alone.
 - Gindices are Gloas's (measured on real proofs); headers before the Gloas fork are refused. A

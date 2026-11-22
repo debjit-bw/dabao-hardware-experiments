@@ -5,7 +5,7 @@ pragma solidity 0.8.28;
 /// for the real cases (an upgradeable proxy, a token whose fee changes, a pool that moves).
 /// `pay` forwards `amount` to `to` and refunds the change to the sender, unless the owner has
 /// switched on `keepChange`. A simulation before the switch sees a refund that the inclusion
-/// after it doesn't get. That's the gap the Dabao's on-chain postcondition closes.
+/// after it doesn't get. The Dabao's on-chain postcondition catches this case.
 contract DemoPayRouter {
     address public immutable owner;
     bool public keepChange;

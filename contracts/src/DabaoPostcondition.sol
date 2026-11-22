@@ -17,8 +17,8 @@ interface IBalance {
 /// The device co-signs a Safe transaction only as a MultiSendCallOnly batch of
 ///   1. the call it simulated, then
 ///   2. `check(...)` on this contract,
-/// so the call executes only if, at inclusion time, the state still matches the simulated
-/// state. A Safe transaction with safeTxGas = 0 and gasPrice = 0 reverts entirely (GS013) if
+/// so the call executes only if, at inclusion time, the listed balances and the checked Safe
+/// settings hold. Approvals and unlisted assets are not checked. A Safe transaction with safeTxGas = 0 and gasPrice = 0 reverts entirely (GS013) if
 /// any call in the batch fails.
 ///
 /// `msg.sender` is the Safe: MultiSendCallOnly runs in the Safe's context through

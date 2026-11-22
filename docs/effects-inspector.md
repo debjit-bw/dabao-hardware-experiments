@@ -112,7 +112,7 @@ Effects on the device are identical to the host's. Most of the round trip is HID
 3. **Emulator heap numbers run ~10–15% above the board's** (64-bit vs 32-bit): 466 / 665 /
    798 KB in the emulator vs 420 / 594 / 699 KB on the chip.
 
-Robustness (done, see PROGRESS.md):
+Robustness (done):
 - The verifier refuses inputs over **140 KB** before decoding ("input too large for this
   device"), just above the largest input measured to work (131 KB → 714 KB peak). Free RAM
   can't be measured from a process: Xous's `map_memory` maps lazily (a 4 MiB probe succeeds on
