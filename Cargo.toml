@@ -34,6 +34,6 @@ debug = false
 strip = false
 lto = "fat"
 # "z" + abort: engine-spike 1.67 MB -> 1.04 MB loadable (unwind tables and landing pads gone).
-# panic=abort on Xous is not yet verified at runtime.
+# panic=abort is verified on the board.
 opt-level = "z"
 panic = "abort"

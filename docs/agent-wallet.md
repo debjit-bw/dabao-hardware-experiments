@@ -62,7 +62,9 @@ and the three wallet tools.
 - **A compromised host**, as long as the recovery key is on it (see the top of this page).
 
 - Spending to **allowlisted** addresses within the daily limits. That is the policy working as
-  designed. A fooled agent can waste at most today's budget, on destinations the owner chose.
+  designed. That is **not** limited to destinations the owner meant:
+  a swap with the allowlisted router as recipient leaves the output for anyone to sweep, so a
+  fooled agent can hand today's budget to an attacker (docs/GUIDE.md, hole A).
 - `device_policy` shows the agent the allowlist. That helps an honest agent avoid useless
   proposals, and it tells an attacker nothing they can use: the list isn't writable from the
   host.

@@ -4,8 +4,8 @@
 //! transaction touches and packs the proof nodes into the same shape as
 //! `ExecutionWitness { state, codes, keys, headers }`. The device trusts
 //! nothing in here except what it can check: every trie node is verified
-//! against the state root of `parent_header`, and (later) that header is
-//! checked against a trusted head from the light client.
+//! against the state root of `parent_header`, and before signing that header is
+//! checked against the light client's proof.
 #![no_std]
 extern crate alloc;
 

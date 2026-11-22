@@ -18,11 +18,14 @@ shown, and the host is untrusted, so today the policy in the firmware is the onl
 
 The board can also **co-sign for a 2-of-3 Safe** used by an AI agent (docs/safe-cosigner.md,
 docs/agent-wallet.md). It co-signs only a batch that ends in an **on-chain postcondition**,
-which reverts if tracked balances or the checked Safe settings are worse at inclusion than in
-the simulation (docs/postcondition.md).
+which reverts if a tracked balance is below an absolute floor, or a checked Safe setting
+changed, at inclusion (docs/postcondition.md; see the limits below).
 
 This is a hackathon prototype, tested on Sepolia with tiny amounts and not audited. Each doc
 has measurements, transaction links and limits. Don't put real funds behind it.
+
+**New here? Read [docs/GUIDE.md](docs/GUIDE.md):** the architecture, every file, and how to build, run
+and change everything, in plain English.
 
 ## Layout
 
@@ -87,6 +90,16 @@ demo/postcondition/run.sh             # state changes between co-signing and exe
 
 ## Status and limits
 
+Three known holes, each reproduced (details: [docs/GUIDE.md](docs/GUIDE.md), part 6):
+
+- **An allowlisted router can be a swap recipient**, which skips the slippage rule and leaves
+  the output for anyone to sweep, up to the daily limit.
+- **The postcondition's floors are absolute**, so a deposit before execution can absorb a loss.
+- **Co-signatures don't expire**, and a reverted Safe transaction publishes them for reuse
+  until its nonce is used.
+
+Also:
+
 - **No trusted display, no on-device confirmation.**
 - **The host chooses part of the simulated block**: base fee, gas limit, beneficiary and
   prevrandao aren't checked against the proven parent, so a contract that reads them can
@@ -95,6 +108,7 @@ demo/postcondition/run.sh             # state changes between co-signing and exe
   Other chains are refused by the built-in policy, not by the proof.
 - **The light client follows optimistic (unfinalized) headers**, trusts 2/3 of the sync
   committee and can't know that a header is the newest.
+- **Transactions from the board's own account have no postcondition.**
 - **The postcondition checks only the tracked balances and some Safe settings.** It doesn't
   check approvals, NFTs or other assets.
 - **The demo Safe's agent and recovery keys are files on the same machine.** Whoever controls

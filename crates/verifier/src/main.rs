@@ -1,5 +1,5 @@
-//! Process 2 of 3: the verifier. Owns witness verification and EVM simulation (and, next,
-//! the effects inspector, ERC-7730 check and policy). Trusts nothing it receives: every
+//! Process 2 of 3: the verifier. Owns witness verification and EVM simulation plus
+//! the light client, effects inspector, ERC-7730 check, policy and Safe postcondition. Trusts nothing it receives: every
 //! request comes from the untrusted transport, and every byte of state is checked against
 //! the state root before use.
 //!

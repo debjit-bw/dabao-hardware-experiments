@@ -17,7 +17,7 @@ Code: `crates/policy` (rules, host-testable), `crates/verifier/src/counters.rs` 
 
 ## Trust model
 
-- **The policy is part of the firmware.** `policy/policy.json` is compiled into a 207-byte RLP
+- **The policy is part of the firmware.** `policy/policy.json` is compiled into a 228-byte RLP
   blob (`crates/policy/policy.bin`, built by `scripts/compile-descriptors.sh`) embedded in the
   verifier. Changing it means building and flashing a new image; there is no runtime API to
   change it.
@@ -61,7 +61,7 @@ display.
 
 ```
 max network fee 0.002 ETH; max slippage 300 bps; assets without a limit refused
-allow SwapRouter02 0x3bFA…e48E, WETH9 0xfFf9…6B14, burn address 0x…dEaD
+allow SwapRouter02 0x3bFA…e48E, WETH9 0xfFf9…6B14, burn address 0x…dEaD, DemoPayRouter 0x1ab7…5Fc7
 daily limits: 0.005 ETH, 0.002 WETH, 1 USDC
 ```
 
@@ -71,6 +71,10 @@ Every `sign` / `send-tx` prints the policy's notes (e.g. "ETH: 0.00103 ETH this 
 
 ## Limits / next
 
+- **The allowlist doesn't separate "may call" from "may receive".** An allowlisted router as a
+  swap recipient passes every rule, and with no gain to the sender the slippage rule never
+  runs (docs/GUIDE.md, hole A).
+- **Counters are stored by position**: inserting or reordering limits resets today's spending.
 - **Time comes from the light client.** A day is `block.timestamp / 86400` of the simulated
   block, which must be the parent's timestamp + 12 s, and the parent header must be proven
   canonical by the sync committee (docs/light-client.md), or nothing is signed. A host can't

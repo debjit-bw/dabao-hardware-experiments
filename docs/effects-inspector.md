@@ -46,7 +46,8 @@ recognised):
 
 **Nothing is dropped silently**: an unknown event, a malformed one, a token that moves balances
 without logging, a protocol outside the subset — all surface as `UNEXPLAINED_STORAGE` on that
-contract. The checker treats it as "refuse / warn", so an incomplete subset fails closed.
+contract. The checker treats it as "refuse / warn", so an incomplete subset fails closed,
+except where a recognised event from the same contract excuses the change (see Known limits).
 
 Why swaps needed more than the first cut: a Uniswap swap's token legs are plain ERC-20
 `Transfer`s (already covered), but the pool rewrites its own state (reserves / price) and the
@@ -119,5 +120,5 @@ Robustness (done):
   the 2 MiB chip), and touching pages to find the limit would kill the prober.
 - The transport learns that limit from the verifier at boot and refuses oversized frames from
   their length prefix; `dabao-host` stops uploading when it sees the early refusal.
-- Verifier calls have a 30 s timeout in the transport: a verifier that dies or stalls answers
+- Verifier calls have a 90 s timeout in the transport: a verifier that dies or stalls answers
   "verifier unresponsive … press RESET" instead of hanging the host forever.

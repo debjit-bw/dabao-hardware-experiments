@@ -4,8 +4,8 @@
 //! picks publicnode's free Sepolia endpoint):
 //!
 //! 1. ask the device for its address;
-//! 2. build a `SimInput` on the latest block: the account's nonce, a legacy gas price with
-//!    headroom, a gas estimate, `eth_createAccessList` and `eth_getProof` for everything touched;
+//! 2. build a `SimInput` on the newest proven block: the account's nonce, fees (EIP-1559 unless
+//!    --legacy) with headroom, a gas estimate, `eth_createAccessList` and `eth_getProof` for everything touched;
 //! 3. the device simulates, runs the ERC-7730 check and signs (or refuses); the host re-verifies
 //!    the signature and every field against the request;
 //! 4. `--broadcast`: `eth_sendRawTransaction`, wait for the receipt, and compare the logs that

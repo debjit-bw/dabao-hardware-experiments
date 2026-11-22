@@ -8,7 +8,7 @@ effects inspector (`docs/effects-inspector.md`). Code: `crates/clear-sign` (chec
 ## Trust model
 
 - **Descriptors are part of the firmware.** The host compiles 7730 JSON into a compact RLP blob
-  (`crates/clear-sign/descriptors.bin`, 2.3 KB for two descriptors) that is built into the
+  (`crates/clear-sign/descriptors.bin`, 4.5 KB with the token list) that is built into the
   verifier. A host that could supply descriptors at runtime could also supply one that hides the
   dangerous fields, so it can't.
 - A descriptor applies only to its `context.contract.deployments` (chain id + address), matched
@@ -46,7 +46,9 @@ the shown fields are the union. An inner call without a format is a violation.
 | Descriptor | Formats | Origin |
 |---|---|---|
 | Uniswap v3 Router 2 (`0x68b3…Fc45`) | exactInputSingle, exactOutputSingle, swapExactTokensForTokens, swapTokensForExactTokens | verbatim from ethereum/clear-signing-erc7730-registry (CC0) |
-| WETH9 (`0xC02a…6Cc2`) | deposit, withdraw, transfer, approve | written for this project in 7730 format |
+| Uniswap v3 Router 2, Sepolia (`0x3bFA…e48E`) | the same four | the registry file with the Sepolia deployment |
+| DemoPayRouter (`0x1ab7…5Fc7`, Sepolia) | pay | written for this project |
+| WETH9 (`0xC02a…6Cc2`, Sepolia `0xfFf9…6B14`) | deposit, withdraw, transfer, approve | written for this project in 7730 format |
 
 Compiler subset: `context.$id` / deployments; `display.formats` keyed by human-readable
 signatures with named params (including named tuple members, which alloy's parser rejects, so

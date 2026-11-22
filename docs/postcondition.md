@@ -19,9 +19,9 @@ MultiSendCallOnly 1.4.1** with two CALLs from the Safe:
   from the Safe), the Safe's balance is at least its **simulated post-balance minus the
   slippage the user was shown** (the simulated output minus the shown minimum).
 
-If `check` reverts, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0). For
-the **tracked balances and checked settings** the Safe ends no worse than that. Nothing else
-is covered: see Limits.
+If `check` reverts, the whole Safe transaction reverts (GS013: safeTxGas = gasPrice = 0). The
+floors are **absolute balances**, so this does not bound the loss if the Safe receives funds
+in between. Only tracked balances and checked settings are covered: see Limits.
 
 ## Why it can be trusted
 
@@ -37,8 +37,9 @@ postcondition asserts, compares the SafeTx hash with the Safe's own `getTransact
 (operation 1), and runs a pre-flight via `Safe.simulateAndRevert` (a DELEGATECALL from the Safe's
 context on the latest state, no signatures needed).
 
-A useful side effect: a co-signed SafeTx stays valid until its nonce is used, for example
-after a revert. Executing it later still runs the check, so the tracked balances keep their floors.
+**A co-signed SafeTx stays valid until its nonce is used, and a reverted execution publishes
+both signatures, so anyone can submit it again.** Executing it later still runs the check, but
+after a deposit the old floors no longer bound the loss.
 What isn't checked (approvals, untracked assets) can differ from what was simulated.
 
 ## On the board (Sepolia, 2026-11-22)
@@ -52,7 +53,7 @@ contract whose behaviour can still change would.
 |---|---|
 | Safe → 0.0001 ETH to 0x…dEaD, wrapped | co-signed; floor "Safe ≥ 0.00139 ETH"; [executed](https://sepolia.etherscan.io/tx/0xc6508b507b7a81a7279aa043d932fadcd7043578fe914a1eb7440b42e87d4ff8), logs identical. Same SafeTx hash as the host's `--local` run of the same pipeline |
 | Safe pays 0.0001 through the router (sends 0.0005, 0.0004 change), and the router's owner switches `keepChange` on **after the device co-signed** (`demo/postcondition/run.sh`) | floor "Safe ≥ 0.00129 ETH". The agent executes anyway (`--force`): **[reverted on chain](https://sepolia.etherscan.io/tx/0xfc14899229365f302888ffcbd471214ee46d96d35dbb52aff638e4a1b5f878df)**, the Safe kept all 0.00139 ETH (by calculation, without the postcondition it would have paid 0.0005; that case was not run) |
-| the same, by accident a second time (a stray run of the script) | [reverted](https://sepolia.etherscan.io/tx/0x3e573dd9b66374ced179275e5810584856538310bbe9e8df73159e7367f58874); the Safe lost nothing |
+| the same, by accident a second time (a stray run of the script) | [reverted](https://sepolia.etherscan.io/tx/0x3e573dd9b66374ced179275e5810584856538310bbe9e8df73159e7367f58874); the Safe lost nothing in that transaction, but it published reusable signatures for that nonce |
 | the honest router payment (`run.sh honest`) | co-signed, [executed](https://sepolia.etherscan.io/tx/0x64726b33951c06efb71ca981f229259771c4175fd5ee752b9d79a3e1776431d2). The proven parent block was still from before the switch-back, so the device simulated (and showed, and counted) the 0.0005 cost. At inclusion the router refunded the change, so the Safe ended above the floor, which the postcondition allows |
 
 Cost on the device: witness ~95–99 KB (the postcondition reads the policy's assets, and
@@ -64,6 +65,9 @@ buffer copy).
 
 ## Limits
 
+- **Deposits absorb losses.** Floors are absolute. Reproduced on a fork: a payment simulated at
+  0.0001 ETH cost 0.0005 after a 0.0004 deposit, and `check` passed.
+- **No expiry.** See above; use up the nonce after any reverted or abandoned co-signature.
 - **Untracked assets aren't asserted.** A token the simulation didn't move and the policy
   doesn't list, NFTs and ERC-1155s can change at inclusion without failing the check.
 - **Slippage floors haven't been exercised through the Safe on the board**, only ETH floors.

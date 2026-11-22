@@ -39,8 +39,8 @@ after its own checks.
    …except the agent **plus** the recovery key, which is the intended human override.
 5. **The signer builds the hash itself.** The verifier sends the approved fields and the
    verified nonce; the signer computes the SafeTx EIP-712 hash
-   (`sim_types::safe::tx_hash`: domain `{chainId, verifyingContract}`, operation CALL,
-   no gas-refund parameters) and returns a 65-byte owner signature (`v` = 27/28).
+   (`sim_types::safe::tx_hash_op`: domain `{chainId, verifyingContract}`, operation DELEGATECALL
+   to MultiSendCallOnly with [the call, the postcondition], no gas-refund parameters) and returns a 65-byte owner signature (`v` = 27/28).
 
 The host then checks the device's signature against the hash it computes itself and against
 the Safe's own `getTransactionHash`. The agent adds its signature, the signatures are sorted by
@@ -49,6 +49,8 @@ compares the inner call's logs on chain (everything not emitted by the Safe itse
 device's prediction.
 
 ## On the board (2026-11-22, Sepolia)
+
+(Recorded before the postcondition was added; docs/postcondition.md has the later runs.)
 
 | Case | Result |
 |---|---|
