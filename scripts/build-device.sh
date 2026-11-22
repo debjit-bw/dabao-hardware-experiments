@@ -16,8 +16,10 @@
 # flash order). Recoverable by reflashing, but confusing; so fail the build.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-XOUS_CORE="${XOUS_CORE:-$here/vendor/xous-core}"
+# not $XOUS_CORE: other projects export it, and our crates always build against the submodule
+XOUS_CORE="${DABAO_XOUS_CORE:-$here/vendor/xous-core}"
 XOUS_CORE="$(cd "$XOUS_CORE" && pwd)"
+echo "xous-core: $XOUS_CORE"
 app="${1:-$here/target/riscv32imac-unknown-xous-elf/release/transport}"
 shift || true
 # generic-hid (eth-burner's transport) replaces the composite USB device, so there is no USB

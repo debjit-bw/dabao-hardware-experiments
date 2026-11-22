@@ -959,7 +959,7 @@ owner of the demo Safe. It doesn't enforce the board's memory limits.
 | `DABAO_PORT` | emulator | TCP port (default 7610). |
 | `DABAO_SIGNER_KEY` | emulator | Key file. |
 | `DABAO_SLOTS_DIR` | emulator | Folder for fake slots. |
-| `XOUS_CORE` | scripts | A different xous-core checkout. |
+| `DABAO_XOUS_CORE` | scripts | A different xous-core checkout. (A plain `XOUS_CORE` is ignored on purpose.) |
 | `SERVICE` | build script | Program for the system image (default `verifier`). |
 | `GENERIC_HID` | build script | `0` gives a USB console instead of the HID transport. |
 | `PYTHON` | flash script | Python that has pyserial. |

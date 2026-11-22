@@ -19,7 +19,7 @@ import glob, os, re, select, sys, termios, time, tty
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XOUS_CORE = os.environ.get("XOUS_CORE", os.path.join(HERE, "vendor", "xous-core"))
+XOUS_CORE = os.environ.get("DABAO_XOUS_CORE", os.path.join(HERE, "vendor", "xous-core"))
 LABELS = ["boot0 partition", "boot0 code only", "boot0 baobit toolchain",
           "boot1 partition", "boot1 code only", "boot1 baobit toolchain"]
 RED_FLAGS = [
