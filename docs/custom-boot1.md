@@ -1,6 +1,9 @@
 # Plan: our own boot1, for a key the hardware protects
 
-Status: **design only, nothing flashed.** This page explains why we'd replace boot1, what
+Status: **built and checked on the laptop, nothing flashed. Not possible on our board:**
+its boot0 (v0.10.0) erases the collateral whenever boot1 is signed with the developer key, the
+only key we can sign boot1 with (next section). It needs a board whose boot0 has the later
+logic, or a boot1 signed by Baochip. This page explains why we'd replace boot1, what
 upstream already provides, what we'd have to change, which permanent settings it touches,
 and what could go wrong. Background: [hardware.md](hardware.md#the-key-store-what-the-hardware-protects-and-why-our-key-doesnt-use-it).
 
@@ -20,6 +23,30 @@ With our own boot1:
 2. only firmware signed with our key runs, where today anyone's developer-signed firmware does;
 3. installing a boot1 with different keys makes boot0 erase the collateral first, so the key
    is destroyed rather than stolen.
+
+## Our board's boot0 (v0.10.0) rules it out
+
+Boot0 is the part we never change, and ours is the released v0.10.0. That version's
+`mutual_distrust` erases the collateral whenever boot1 is signed with the developer key:
+
+> "In all cases - if developer key is active - erase the collateral. This plugs a hole where it
+> could be possible to bypass checks by stitching a third party header onto a developer-signed
+> image."
+
+Upstream removed that rule later (commit `012ace556`, "remove collateral erase on developer
+mode"), after adding the counter-signature (`1b3a02603`) that closes the same hole another way.
+Boot0 accepts a boot1 signed with Baochip's keys or with the developer key, and only Baochip
+holds theirs. So on our board, any boot1 we make is developer-signed, and the collateral is
+erased on every boot. The source we read (and our earlier plan) describes the newer boot0.
+
+What still works with this boot0, if we installed our boot1 anyway:
+
+- only firmware signed with our key boots;
+- `audit` reports firmware hashes (below).
+
+What doesn't: a persistent, hardware-protected key, and "replacing boot1 destroys the key".
+
+**Unknown:** which boot0 production A1 boards ship with.
 
 ## Our chip is A0, and that changes two things
 
@@ -53,19 +80,30 @@ Boot1's `audit` reports `Stepping is: A0` for our board.
 
 ## What we'd change (all in our fork, all build-side)
 
-1. **The signing tool:** in third-party mode, embed *our* public key in key slot 0 and
-   counter-sign with *our* private key, instead of the test key.
-2. **The build:** have `cargo xtask bao1x-boot1` turn on boot1's `thirdparty` feature. Today
-   `--thirdparty-test` only changes how the image is signed, not the boot1 code.
-3. **Signing the firmware:** sign loader, Xous and apps with our key (`--loader-key`,
-   `--kernel-key`). The new boot1 accepts only images signed with the keys it carries, so our
-   current developer-signed images would stop booting until they're re-signed.
+Status: items 1–4 are done in the fork (built, not pushed); item 5 isn't started.
+
+1. **The signing tool** (`tools/src/sign_image.rs`, when `XOUS_THIRDPARTY_KEY` names our
+   key): our public key in **all four** key slots (`tpk0`–`tpk3`), counter-signed with our
+   private key, and the post-quantum slots left empty. Upstream puts fresh random keys in slots
+   1–3, so boot1 is different on every build. Empty ed25519 slots would be dangerous: an
+   all-zero key is a small-order point, and boot0's counter-signature check (non-strict
+   `verify_prehashed`, no skip for empty slots) would accept forged signatures for it. Empty
+   post-quantum slots are skipped by tag, and post-quantum isn't required. Result: the same
+   boot1 bytes on every build (checked twice).
+2. **The build:** `cargo xtask bao1x-boot1 --thirdparty` turns on boot1's `thirdparty` feature.
+   Upstream's `--thirdparty-test` only changes how the image is signed, not the boot1 code.
+3. **Signing the firmware:** `FIRMWARE_KEY=.dabao-firmware-key/firmware.key scripts/build-device.sh`
+   signs loader, Xous and apps with our key (xtask `--lkey`/`--kkey`). Checked with OpenSSL:
+   all three verify with our key and not with the developer key. The new boot1 accepts only
+   images signed with the keys it carries, and the stock boot1 refuses these, so never flash
+   them on a board with the stock boot1.
 4. **Firmware hashes in `audit`.** Stock boot1's `audit` hashes only boot0 and boot1, and its
    memory-reading `peek` exists only in debug builds. Ours would also print the SHA-512 of
    the loader, Xous and apps images (each image's length comes from its signature block).
    With reproducible builds, anyone can then check that a board holds exactly the firmware a
-   given commit builds to. `scripts/firmware-verify.py` would compare those hashes instead of
-   reading memory back. Like the rest of `audit`, it's boot1 reporting, so it's as
+   given commit builds to. Done in `bao1x-boot/boot1/src/audit.rs` (`loader code only`,
+   `kernel code only`, `apps code only`). `scripts/firmware-verify.py --hashes` prints the
+   expected values from UF2 files. Not compared with a real board yet. Like the rest of `audit`, it's boot1 reporting, so it's as
    trustworthy as boot1. A replaced boot1 could lie, but replacing it also erases the
    collateral, which changes the device's address.
 5. **The signer:** derive the signing key from the collateral (HKDF-SHA256 over slots 261–263,
@@ -107,8 +145,10 @@ All are one-way counters: they can only go up. Each one tops out at 10,000.
 
 ## Steps, with a stop after each
 
-1. **No board changes.** Make the build changes above. Build boot1, the recovery image and
-   re-signed firmware. Read the post-quantum and staging code. Check the built images' headers
+1. **No board changes.** *Done (2026-11-26):* items 1–4 above, built and checked. The recovery
+   image (`cargo xtask bao1x-boot-updater --boot1 <our boot1.img>`) builds without its `boot0`
+   feature: no boot0-writing code in it, and our boot1 embedded whole. Make the build changes
+   above. Build boot1, the recovery image and re-signed firmware. Read the post-quantum and staging code. Check the built images' headers
    (embedded keys, counter-signature) with a script. *Status: the firmware key exists
    (`.dabao-firmware-key/`, gitignored). Both build changes made. Boot1 built and checked: our
    key is in slot 0, the developer key is absent. Post-quantum isn't required (only if the

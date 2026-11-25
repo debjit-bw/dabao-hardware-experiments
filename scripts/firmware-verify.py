@@ -14,10 +14,18 @@ UF2 files. Build the UF2s yourself from the published source (the builds are rep
 and run scripts/board-audit.py first: the read-back is done by boot1, so it is only as
 trustworthy as boot1, and audit checks boot1 against Baochip's published hashes.
 
+With --hashes, it doesn't talk to the board: it prints the "code only" SHA-512 of each
+image, exactly as our own boot1's `audit` reports them ("loader code only", "kernel code only",
+"apps code only"). Compare those lines with the board's `audit` output.
+
 Stdlib only (no pyserial).
 """
 import argparse, glob, hashlib, os, re, select, struct, sys, termios, time, tty
 
+# xous-sign-image's signature block: MAGIC_NUMBER is b"yumy", b"Bao3" stored as little-endian u32s
+SIG_MAGIC = b"yumy"[::-1] + b"Bao3"[::-1]
+SIGBLOCK_LEN = 768
+IMAGE_NAMES = {0x60060000: "loader", 0x600A0000 - SIGBLOCK_LEN: "kernel", 0x60300000 - SIGBLOCK_LEN: "apps"}
 UF2_MAGIC = (0x0A324655, 0x9E5D5157)
 UF2_END = 0x0AB16F30
 WORDS_PER_PEEK = 1024
@@ -68,6 +76,19 @@ def is_boot1(port):
         return b"Commands include" in out
     finally:
         os.close(fd)
+
+
+def code_only_hash(image):
+    """boot1 audit's "code only" hash: the signed bytes after the signature block."""
+    magic_at = image.find(SIG_MAGIC, 0, SIGBLOCK_LEN)
+    if magic_at < 4:
+        return None
+    unsigned_len = magic_at - 4                 # sealed_data starts with a u32 version, then the magic
+    (signed_len,) = struct.unpack_from("<I", image, magic_at + 8)
+    n = signed_len - (SIGBLOCK_LEN - unsigned_len)
+    if n <= 0 or SIGBLOCK_LEN + n > len(image):
+        return None
+    return hashlib.sha512(image[SIGBLOCK_LEN:SIGBLOCK_LEN + n]).hexdigest()
 
 
 class Boot1:
@@ -128,8 +149,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", help="boot1's serial port (default: whichever port answers as boot1)")
     ap.add_argument("--wait", type=float, default=180, help="seconds to wait for boot1 (default 180)")
+    ap.add_argument("--hashes", action="store_true", help="only print the images' audit hashes")
     ap.add_argument("uf2", nargs="+")
     a = ap.parse_args()
+    if a.hashes:
+        for f in a.uf2:
+            ranges = uf2_ranges(f)
+            start, image = ranges[0]
+            name = IMAGE_NAMES.get(start, f"image at {start:#x}")
+            h = code_only_hash(image) if len(ranges) == 1 else None
+            print(f"{name} code only: {h or 'no signature block found'}")
+        return
     images = [(f, uf2_ranges(f)) for f in a.uf2]
     print(f"waiting up to {a.wait:.0f}s for boot1 (press RESET)...", flush=True)
     port, t0 = None, time.time()

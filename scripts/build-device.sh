@@ -84,8 +84,8 @@ fi
 
 # Image signing embeds `git describe`, which needs upstream's version tags. A clone of the fork
 # has none, so give the pinned commit's version. (Another commit must bring its own tags.)
-PINNED_REV=b08da4ec96c9bbd01ae19420ebdd1a37fca433e7
-PINNED_DESCRIBE=v0.10.2-180-gb08da4ec9
+PINNED_REV=9adce68498a2cfa64ac09ef8e9ff35254ea1be22
+PINNED_DESCRIBE=v0.10.2-182-g9adce6849
 version_args=()
 if ! git -C "$XOUS_CORE" describe --long --match 'v[0-9]*' >/dev/null 2>&1; then
     if [ "$(git -C "$XOUS_CORE" rev-parse HEAD)" = "$PINNED_REV" ]; then
@@ -96,6 +96,16 @@ if ! git -C "$XOUS_CORE" describe --long --match 'v[0-9]*' >/dev/null 2>&1; then
         echo "  git -C '$XOUS_CORE' fetch https://github.com/betrusted-io/xous-core.git 'refs/tags/v*:refs/tags/v*'" >&2
         exit 1
     fi
+fi
+
+# FIRMWARE_KEY: sign loader, kernel and apps with our own key instead of the developer key.
+# Only a boot1 that carries that key (docs/custom-boot1.md) boots such images. The board's stock
+# boot1 refuses them, so don't flash them there.
+if [ -n "${FIRMWARE_KEY:-}" ]; then
+    [ -f "$FIRMWARE_KEY" ] || { echo "ERROR: FIRMWARE_KEY not found: $FIRMWARE_KEY" >&2; exit 1; }
+    FIRMWARE_KEY="$(cd "$(dirname "$FIRMWARE_KEY")" && pwd)/$(basename "$FIRMWARE_KEY")"
+    version_args+=(--lkey "$FIRMWARE_KEY" --kkey "$FIRMWARE_KEY")
+    echo "WARNING: signing with $FIRMWARE_KEY. These images boot only under our own boot1, not the stock one."
 fi
 
 (cd "$XOUS_CORE" && cargo xtask dabao "$app" ${extra_apps[@]+"${extra_apps[@]}"} ${usb_feature[@]+"${usb_feature[@]}"} \

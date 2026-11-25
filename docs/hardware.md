@@ -120,9 +120,12 @@ third-party keys. Boot0 erases them if boot1 is replaced by one with different k
 - reflashing boot1 would destroy the key, not reveal it;
 - only firmware signed with our key would run.
 
-We haven't done it, because replacing boot1 is risky on our only board. On A0 the
-"checked by the RRAM hardware" part is weaker, as explained above. The boot-chain parts (only
-our firmware runs; replacing boot1 destroys the key) don't depend on it. Details:
+**It can't work on our board.** Our board's boot0 is the released v0.10.0, and that version
+erases the collateral on every boot whenever boot1 is signed with the developer key. Upstream
+removed that rule later, once third-party counter-signatures existed. The developer key is the
+only key we can sign a boot1 with, and we never change boot0. So it needs a board whose boot0
+has the later logic. We don't know which boot0 production A1 boards ship with. The parts are
+built and checked on the laptop (our boot1, recovery image, firmware signed with our key):
 [custom-boot1.md](custom-boot1.md).
 
 ## BIO and DMA: an attack, proved and fixed
