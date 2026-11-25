@@ -100,6 +100,89 @@ program isn't told. It only sees that its reads don't work. Changing that would 
 the interface. A firmware that needs BIO DMA into main memory needs a finer rule. For
 example, the server could allow windows only over memory that belongs to the program asking.
 
+## Reproducing the tests
+
+Both fixes were tested on a physical Dabao (the keystore claims on 2026-11-21, the BIO fix on
+2026-11-25). The steps below rebuild those test images. Each one runs a probe that plays a
+compromised process and prints `PROBE` lines on the USB serial console. Test images contain a
+probe and no USB transport, so the board can't sign anything until the normal image goes back
+on (last section).
+
+You need a board that was flashed with this repo's firmware before, the build requirements in
+the [README](../README.md#build-from-source), and a Python with pyserial for flashing:
+
+```sh
+python3 -m venv .venv-flash
+.venv-flash/bin/pip install pyserial progressbar2
+export PYTHON="$PWD/.venv-flash/bin/python"
+T=riscv32imac-unknown-xous-elf
+R=vendor/xous-core/target/$T/release
+```
+
+Each flash step waits for the board's bootloader: press RESET when it says
+`waiting ... for boot1`. The flash script then boots the image and prints its log for 120
+seconds. The probe repeats its lines every 5 seconds, so they all appear.
+
+### Keystore slot claims
+
+```sh
+cargo build --release -p keystore-probe --target $T --features board-dabao,bao1x
+GENERIC_HID=0 scripts/build-device.sh target/$T/release/keystore-probe
+scripts/flash-and-log.py --log-secs 120 $R/xous.uf2 $R/apps.uf2
+```
+
+Expected: `PROBE summary: 8/8 as expected`, and keystore warnings such as
+`app slot 160: access by Some(9) denied (claimed)`. The full table is in
+[keystore-slot-claims.md](keystore-slot-claims.md#tests).
+
+There is no "before" image for this one: the signer itself needs `AppKey::Claim`, so it
+doesn't build against the stock keystore. The probe's `read unclaimed slot 170` line shows
+the stock behaviour: a slot nobody claimed is still served to any process.
+
+### BIO DMA windows: with the fix
+
+```sh
+cargo build --release -p bio-dma-probe --target $T --features board-dabao,bao1x
+GENERIC_HID=0 scripts/build-device.sh target/$T/release/bio-dma-probe
+scripts/flash-and-log.py --log-secs 120 $R/xous.uf2 $R/apps.uf2
+```
+
+Expected: `PROBE summary: RRAM slot blocked / SRAM blocked`, and the BIO server's warning
+`BIO DMA windows refused for Some(9): only IFRAM is allowed`.
+
+### BIO DMA windows: without the fix
+
+This puts back the stock BIO server for one build, then restores it:
+
+```sh
+git -C vendor/xous-core checkout c8aeac994 -- services/bao1x-hal-service/src/servers/bio.rs
+GENERIC_HID=0 scripts/build-device.sh target/$T/release/bio-dma-probe
+git -C vendor/xous-core checkout HEAD -- services/bao1x-hal-service/src/servers/bio.rs
+scripts/flash-and-log.py --log-secs 120 $R/xous.uf2 $R/apps.uf2
+```
+
+Expected: `PROBE RRAM app slot: 8/8 words returned, 8/8 match the canary -> READ THROUGH BIO DMA`,
+the same for the SRAM page, and `PROBE summary: RRAM slot READ / SRAM READ`.
+`git -C vendor/xous-core status` must be clean again afterwards.
+
+### Back to the normal image
+
+```sh
+scripts/build-device.sh
+scripts/flash-and-log.py --log-secs 20 $R/xous.uf2 $R/apps.uf2
+target/debug/dabao-host policy
+```
+
+Check that `policy` prints the expected policy name before any signing request.
+
+### Not tested yet
+
+- Mapping the slot region directly (`map_memory` at `0x603E_0000`) from another process. The
+  kernel's page ownership should refuse it with `MemoryInUse`. That's read in the kernel source,
+  not run on the board.
+- BIO DMA into IFRAM. The fix still allows it. Our firmware doesn't use the BIO, so we didn't
+  check that IFRAM holds nothing sensitive.
+
 ## Not sent upstream
 
 None of the three is in betrusted-io/xous-core. The build fix is upstream already (#1023);

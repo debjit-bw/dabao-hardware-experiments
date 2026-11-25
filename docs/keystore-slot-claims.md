@@ -101,13 +101,12 @@ plays the compromised process and, after the signer has started, tries every way
 Feature `steal` builds a probe that claims 160..162 at boot, racing the signer: the signer must
 then refuse to start ("can't claim keystore app slots").
 
-Build and run:
+Build and run. Set `PYTHON` to a Python with pyserial first ([xous-core-fork.md](xous-core-fork.md#reproducing-the-tests) shows how):
 
 ```sh
 cargo build --release -p keystore-probe --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x
 GENERIC_HID=0 scripts/build-device.sh target/riscv32imac-unknown-xous-elf/release/keystore-probe
-PYTHON=<python with pyserial, progressbar2> scripts/flash-and-log.py --until "PROBE summary" \
-    vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{xous,apps}.uf2
+scripts/flash-and-log.py --log-secs 120 vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/xous.uf2 vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/apps.uf2
 ```
 
 ## Results (board, 2026-11-21)
