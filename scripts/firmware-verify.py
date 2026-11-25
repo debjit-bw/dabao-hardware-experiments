@@ -3,7 +3,9 @@
 
 Usage: scripts/firmware-verify.py [--port /dev/cu.usbmodemXXXX1] file.uf2 [...]
 
-The board must be in boot1 (press RESET; the flash script's "waiting for boot1" state).
+The board must be in boot1 (press RESET; the flash script's "waiting for boot1" state), and
+that boot1 must have the `peek` command. Baochip's released boot1 doesn't: `peek` is only in
+builds with the `unsafe-debug` feature.
 For every UF2 file, this reads the same addresses back from the board with boot1's
 read-only `peek` command and compares them byte for byte. It never writes to the board.
 

@@ -165,11 +165,16 @@ The firmware itself can be checked too:
 
 1. **Our builds are reproducible.** The same commit gives byte-identical images, wherever it's
    checked out (README, "Build from source"). Anyone can rebuild and get the same hashes.
-2. **The board can be read back.** Boot1 has a read-only `peek` command that prints any address
-   in the code region. `scripts/firmware-verify.py` reads the loader, Xous and apps regions
-   back that way and compares them byte for byte with UF2 files you built yourself.
+2. **Reading a board back needs a boot1 that can do it.** `scripts/firmware-verify.py` reads the
+   loader, Xous and apps regions back with boot1's `peek` command and compares them byte for
+   byte with UF2 files you built yourself. But `peek` is compiled only into debug builds of
+   boot1 (`unsafe-debug`). Baochip's released boot1, the one on our board, answers
+   "Command not recognized" (tested 2026-11-26). Our planned boot1 would add a read-back, or
+   firmware hashes in `audit`.
 
-Together: "this published commit, rebuilt by me, is exactly what's on this board."
+So today anyone can check that a commit builds to the published hashes, but not that a given
+board holds them. With such a boot1, the two together would show: "this published commit,
+rebuilt by me, is exactly what's on this board."
 
 Limits:
 

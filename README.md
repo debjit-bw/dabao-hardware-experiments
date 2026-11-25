@@ -80,14 +80,10 @@ shows in full. [docs/xous-core-fork.md](docs/xous-core-fork.md) explains each on
 Mac: two clones in different folders with different Cargo homes. Not yet tested on a second
 machine or OS.
 
-To check what a board runs, put it in boot1 (press RESET), then compare it with your own build.
-This reads the board's memory back with boot1's read-only `peek`:
-
-```sh
-scripts/board-audit.py
-R=vendor/xous-core/target/riscv32imac-unknown-xous-elf/release
-scripts/firmware-verify.py $R/loader.uf2 $R/xous.uf2 $R/apps.uf2
-```
+Checking that a *board* runs a given build isn't possible yet with Baochip's released boot1.
+Its `audit` hashes only boot0 and boot1, and its memory-reading command (`peek`) exists only in
+debug builds. `scripts/firmware-verify.py` does the comparison on a boot1 that has `peek`. Our
+planned boot1 ([docs/custom-boot1.md](docs/custom-boot1.md)) would add it.
 
 The descriptors and the policy are compiled into the firmware by
 `scripts/compile-descriptors.sh`; the blobs are checked in.
