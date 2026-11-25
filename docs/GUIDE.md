@@ -707,6 +707,7 @@ No Xous code here, so it also runs on a laptop.
 | `docs/keystore-slot-claims.md` | The keystore change and how it was attacked in tests. |
 | `docs/xous-core-fork.md` | Each change in our xous-core fork, and why. |
 | `docs/hardware.md` | What the chip offers, what we use, and how. |
+| `docs/custom-boot1.md` | The plan for our own boot1 and a hardware-protected key. Not done yet. |
 | `docs/safe-cosigner.md` | The Safe setup and checks. |
 | `docs/postcondition.md` | The final on-chain check. |
 | `docs/agent-wallet.md` | The agent demo and what it does and doesn't prove. |
