@@ -26,6 +26,8 @@ setting changed, or the co-signature expired (docs/postcondition.md).
 This is a hackathon prototype, tested on Sepolia with tiny amounts and not audited. Each doc
 has measurements, transaction links and limits. Don't put real funds behind it.
 
+**How it uses the chip** (MMU, RRAM, TRNG, the RTL, and what it doesn't use): [docs/hardware.md](docs/hardware.md).
+
 **New here? Read [docs/GUIDE.md](docs/GUIDE.md):** the architecture, every file, and how to build, run
 and change everything, in plain English.
 
