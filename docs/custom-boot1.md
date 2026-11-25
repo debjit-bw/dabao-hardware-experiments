@@ -60,7 +60,15 @@ Boot1's `audit` reports `Stepping is: A0` for our board.
 3. **Signing the firmware:** sign loader, Xous and apps with our key (`--loader-key`,
    `--kernel-key`). The new boot1 accepts only images signed with the keys it carries, so our
    current developer-signed images would stop booting until they're re-signed.
-4. **The signer:** derive the signing key from the collateral (HKDF-SHA256 over slots 261–263,
+4. **Firmware hashes in `audit`.** Stock boot1's `audit` hashes only boot0 and boot1, and its
+   memory-reading `peek` exists only in debug builds. Ours would also print the SHA-512 of
+   the loader, Xous and apps images (each image's length comes from its signature block).
+   With reproducible builds, anyone can then check that a board holds exactly the firmware a
+   given commit builds to. `scripts/firmware-verify.py` would compare those hashes instead of
+   reading memory back. Like the rest of `audit`, it's boot1 reporting, so it's as
+   trustworthy as boot1. A replaced boot1 could lie, but replacing it also erases the
+   collateral, which changes the device's address.
+5. **The signer:** derive the signing key from the collateral (HKDF-SHA256 over slots 261–263,
    salted with the chip's UUID). Only process 3 can read the collateral, so this goes with
    making the signer process 3 (option B in the chat history; it also removes the keystore
    patch).
