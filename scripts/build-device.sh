@@ -35,12 +35,31 @@ usb_feature=(--feature usb-bao1x/generic-hid)
 SYSTEM_MAX=$(( 0x260000 ))   # APP_RRAM_START - KERNEL_START
 APPS_MAX=$(( 0xDA300 ))      # APP_RRAM_LEN
 
+# Reproducible images: the same commit must give the same bytes on any machine.
+# - xous-core stamps build times into ticktimer, boot0 and boot1 unless SOURCE_DATE_EPOCH is
+#   set; use the commit's own time.
+# - rustc embeds absolute source paths (panic locations); map the checkout and the Cargo home
+#   to fixed names. The device targets already have rustflags in xous-core's
+#   .cargo/config.toml; target-specific variables repeat them, because they take precedence.
+: "${SOURCE_DATE_EPOCH:=$(git -C "$here" log -1 --format=%ct)}"
+export SOURCE_DATE_EPOCH
+cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+cargo_home="$(cd "$cargo_home" && pwd)"
+case "$here$cargo_home" in *" "*)
+    echo "ERROR: the checkout and CARGO_HOME paths must not contain spaces (rustflags are space-separated)" >&2
+    exit 1 ;;
+esac
+remap="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$here=/build"
+export CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="--cfg curve25519_dalek_backend=\"u32e_backend\" $remap"
+export CARGO_TARGET_RISCV32IMAC_UNKNOWN_NONE_ELF_RUSTFLAGS="--cfg curve25519_dalek_backend=\"fiat\" $remap"
+
 SERVICE="${SERVICE:-verifier}"
 svc_features=()
 [ "$SERVICE" = verifier ] && svc_features=(--features board-dabao)   # keystore slots for policy counters
-(cd "$here" && cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf ${svc_features[@]+"${svc_features[@]}"})
-(cd "$here" && cargo build --release -p transport --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
-(cd "$here" && cargo build --release -p signer --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
+# our crates have no rustflags of their own: only the remap, not xous-core's --cfg
+(cd "$here" && CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="$remap" cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf ${svc_features[@]+"${svc_features[@]}"})
+(cd "$here" && CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="$remap" cargo build --release -p transport --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
+(cd "$here" && CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="$remap" cargo build --release -p signer --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
 # the signer goes into the apps image next to the app (unless building something else)
 extra_apps=()
 [ "$SERVICE" = verifier ] && extra_apps=("$here/target/riscv32imac-unknown-xous-elf/release/signer")
