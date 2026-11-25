@@ -13,3 +13,4 @@ __pycache__/
 # testnet hot keys for the Safe demo (agent, recovery) and the Safe address
 .dabao-keys/
 logs/
+.venv-flash/
