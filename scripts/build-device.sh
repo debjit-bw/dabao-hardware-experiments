@@ -38,18 +38,19 @@ APPS_MAX=$(( 0xDA300 ))      # APP_RRAM_LEN
 # Reproducible images: the same commit must give the same bytes on any machine.
 # - xous-core stamps build times into ticktimer, boot0 and boot1 unless SOURCE_DATE_EPOCH is
 #   set; use the commit's own time.
-# - rustc embeds absolute source paths (panic locations); map the checkout and the Cargo home
-#   to fixed names. The device targets already have rustflags in xous-core's
+# - rustc embeds absolute source paths (panic locations); map the checkout, the Cargo home and
+#   the toolchain to fixed names. The device targets already have rustflags in xous-core's
 #   .cargo/config.toml; target-specific variables repeat them, because they take precedence.
 : "${SOURCE_DATE_EPOCH:=$(git -C "$here" log -1 --format=%ct)}"
 export SOURCE_DATE_EPOCH
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 cargo_home="$(cd "$cargo_home" && pwd)"
-case "$here$cargo_home" in *" "*)
-    echo "ERROR: the checkout and CARGO_HOME paths must not contain spaces (rustflags are space-separated)" >&2
+sysroot="$(cd "$XOUS_CORE" && rustc --print sysroot)"
+case "$here$cargo_home$sysroot" in *" "*)
+    echo "ERROR: the checkout, CARGO_HOME and toolchain paths must not contain spaces (rustflags are space-separated)" >&2
     exit 1 ;;
 esac
-remap="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$here=/build"
+remap="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$here=/build --remap-path-prefix=$sysroot=/rust"
 export CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="--cfg curve25519_dalek_backend=\"u32e_backend\" $remap"
 export CARGO_TARGET_RISCV32IMAC_UNKNOWN_NONE_ELF_RUSTFLAGS="--cfg curve25519_dalek_backend=\"fiat\" $remap"
 
