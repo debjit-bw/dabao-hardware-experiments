@@ -161,12 +161,22 @@ The boot0 and boot1 SHA-512s matched Baochip's v0.10.0 release, and no warning f
 After that, boot1 checks the signature of every image it starts. In developer mode it accepts
 the public developer key, so a signature check says only that *some* developer signed it.
 
-Two limits:
+The firmware itself can be checked too:
 
-- `audit` is boot1 reporting on itself. A replaced boot1 could lie. What can't be faked is
-  boot0, which is permanent.
-- Our image builds aren't bit-for-bit reproducible across checkout paths, so a third party
-  can't yet rebuild our exact firmware and compare.
+1. **Our builds are reproducible.** The same commit gives byte-identical images, wherever it's
+   checked out (README, "Build from source"). Anyone can rebuild and get the same hashes.
+2. **The board can be read back.** Boot1 has a read-only `peek` command that prints any address
+   in the code region. `scripts/firmware-verify.py` reads the loader, Xous and apps regions
+   back that way and compares them byte for byte with UF2 files you built yourself.
+
+Together: "this published commit, rebuilt by me, is exactly what's on this board."
+
+Limits:
+
+- The read-back and `audit` are both done by boot1, so they're only as trustworthy as boot1.
+  `audit` shows boot1's hash, which you compare with Baochip's release. A replaced boot1 could
+  lie about both. Boot0 is what can't be replaced (on A1; see above for A0).
+- Tested on one Mac with two clones; not yet on a second machine or operating system.
 
 The custom boot1 above would improve this. Firmware signed with other keys wouldn't run, and
 replacing boot1 erases the collateral. A signing key derived from the collateral could then

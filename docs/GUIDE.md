@@ -679,6 +679,7 @@ No Xous code here, so it also runs on a laptop.
 | `scripts/run-emu.sh` | Runs the three processes on your computer under hosted Xous. |
 | `scripts/flash-and-log.py` | Waits for boot1, flashes over serial, boots, prints the console. |
 | `scripts/board-audit.py` | Read-only check that a new board's bootloader is genuine. |
+| `scripts/firmware-verify.py` | Read-only check that a board holds exactly the firmware in some UF2 files, by reading it back through boot1. |
 | `scripts/compile-descriptors.sh` | Compiles descriptors, tokens and policy into the two `.bin` files. Descriptor files are listed by name inside it. |
 | `scripts/mcp-call.py` | A tiny MCP client. Also plays the "fooled agent" in the demo. |
 | `scripts/uniswap-calldata.py` | Gets a quote and prints swap calldata. |
@@ -1418,6 +1419,7 @@ $H lc-anchor
 | `scripts/run-emu.sh` | none, env `DABAO_PORT` | file |
 | `scripts/flash-and-log.py` | `[--wait SECS] [--log-secs SECS] [--until TEXT] file.uf2...` | **flash** |
 | `scripts/board-audit.py` | `[serial port]`. The board must be in boot1 | read |
+| `scripts/firmware-verify.py` | `[--port P] [--wait SECS] file.uf2...`. Reads the board back with boot1's `peek` and compares | read |
 | `scripts/compile-descriptors.sh` | none | file |
 | `scripts/mcp-call.py` | `[tool] ['{json arguments}']` | depends on the tool |
 | `scripts/uniswap-calldata.py` | `<from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]` | read |

@@ -74,8 +74,23 @@ shows in full. [docs/xous-core-fork.md](docs/xous-core-fork.md) explains each on
 - per-boot keystore app-slot claims (docs/keystore-slot-claims.md);
 - BIO DMA windows only inside IFRAM, so no program can read other programs' memory through the BIO.
 
-Builds are not bit-for-bit reproducible across checkout paths. The descriptors and the policy
-are compiled into the firmware by `scripts/compile-descriptors.sh`; the blobs are checked in.
+**Builds are reproducible:** the same commit gives byte-identical `loader.uf2`, `xous.uf2` and
+`apps.uf2`, wherever it's checked out and whatever the Cargo home. `build-device.sh` sets
+`SOURCE_DATE_EPOCH` to the commit's time and maps local paths to fixed names. Tested on one
+Mac: two clones in different folders with different Cargo homes. Not yet tested on a second
+machine or OS.
+
+To check what a board runs, put it in boot1 (press RESET), then compare it with your own build.
+This reads the board's memory back with boot1's read-only `peek`:
+
+```sh
+scripts/board-audit.py
+R=vendor/xous-core/target/riscv32imac-unknown-xous-elf/release
+scripts/firmware-verify.py $R/loader.uf2 $R/xous.uf2 $R/apps.uf2
+```
+
+The descriptors and the policy are compiled into the firmware by
+`scripts/compile-descriptors.sh`; the blobs are checked in.
 
 **Warning:** the first self-built image puts a Dabao into developer mode and permanently erases
 its factory secrets. `scripts/board-audit.py` audits the boot chain first.
