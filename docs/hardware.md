@@ -6,9 +6,9 @@ for each item what we use, how, and what we don't. "Measured" means shown on our
 software, and we didn't use IRIS. Both are said plainly below.
 
 The chip's design (RTL) we read is
-[baochip/baochip-1x](https://github.com/baochip/baochip-1x) `main` at `750f0e8`. Its README says
-`main` tracks the latest die. We haven't compared it with the `tapeout-a1` tag, or checked
-which die revision our board has.
+[baochip/baochip-1x](https://github.com/baochip/baochip-1x): `main` at `750f0e8`, which tracks
+the latest die (A1), and the `tapeout-a0` tag. **Our board's chip is stepping A0** (boot1's
+`audit` prints `Stepping is: A0`). Where the two differ, this page says so.
 
 ## Summary
 
@@ -84,14 +84,22 @@ could speed up BLS12-381 is an open question we didn't explore.
 it is: one of four (boot0, boot1, fw0, fw1). Each storage slot has an owner. If the user
 doesn't match the owner, the read returns zeros. Boot1 maps Xous processes to users and then
 locks the mapping. Only process 3 (normally the keystore) gets the trusted user; every other
-process, the kernel included, gets the untrusted one. An engineering change in the RTL
-(`#eco16`) keeps this check always on.
+process, the kernel included, gets the untrusted one.
+
+**A0 versus A1.** On A1, an engineering change (`#eco16`) keeps the slot checks always on. On
+**A0, our chip,** every check is ANDed with an enable bit in the RRAM controller's `RRCCR`
+register (`tapeout-a0`, `rrc.sv` lines 718–790), and that register has no lock. So on A0, code
+that can write `RRCCR` can switch the checks off. Upstream's `detect_stepping()` tells the two
+apart in exactly that way. Boot code sets the bits on. After that, what keeps them on is that
+no other program can map the controller's registers: kernel page ownership again, not
+hardware.
 
 **What it can't do:**
 
 - Tell two programs with the same user apart. There are four users and one trusted process.
 - Check slots with no owner. The check only runs when the owner field isn't zero, and app slots
   ("open") have none. Only boot code can set an owner.
+- On A0, stay on against software that can reach the controller's registers (above).
 - Keep protected secrets on a board in developer mode. Boot0 erases the protected slots on
   every boot when developer mode is set (`bao1x-boot/boot0/src/main.rs`). Developer mode is
   permanent, and our board is in it: the first self-built image puts every Dabao there.
@@ -112,7 +120,10 @@ third-party keys. Boot0 erases them if boot1 is replaced by one with different k
 - reflashing boot1 would destroy the key, not reveal it;
 - only firmware signed with our key would run.
 
-We haven't done it, because replacing boot1 is risky on our only board.
+We haven't done it, because replacing boot1 is risky on our only board. On A0 the
+"checked by the RRAM hardware" part is weaker, as explained above. The boot-chain parts (only
+our firmware runs; replacing boot1 destroys the key) don't depend on it. Details:
+[custom-boot1.md](custom-boot1.md).
 
 ## BIO and DMA: an attack, proved and fixed
 

@@ -21,6 +21,27 @@ With our own boot1:
 3. installing a boot1 with different keys makes boot0 erase the collateral first, so the key
    is destroyed rather than stolen.
 
+## Our chip is A0, and that changes two things
+
+Boot1's `audit` reports `Stepping is: A0` for our board.
+
+1. **The recovery image can rewrite boot0 on A0.** Upstream builds `bao1x-boot-updater` with
+   a `boot0` feature by default. On A0 (and only there), it rewrites boot0, the first stage
+   that is permanent on A1, and says "device likely bricked" if that write fails. **We must
+   build it without that feature** (`--no-default-features`, then the needed features by name)
+   and check the built image for the boot0 payload before using it.
+2. **The RRAM hardware check is switchable on A0.** The access checks are gated by enable bits
+   in an unlocked register (see [hardware.md](hardware.md)). So "only process 3 can read the
+   collateral" holds while nothing else can write that register. That's kernel page
+   ownership, as for everything else. What A0 doesn't weaken:
+   - only firmware signed with our key runs (boot1's signature check);
+   - replacing boot1 with other keys makes boot0 erase the collateral.
+
+   Open question: A0's boot0 is writable (that's what the recovery image's boot0 update relies
+   on). Whether software that isn't boot code can write it, for example after clearing the code
+   check, decides whether a physical attacker could replace boot0 itself and skip the erase.
+   Read before step 3.
+
 ## What upstream already has
 
 | Piece | Where | Ready to use? |
@@ -80,8 +101,11 @@ All are one-way counters: they can only go up. Each one tops out at 10,000.
 
 1. **No board changes.** Make the build changes above. Build boot1, the recovery image and
    re-signed firmware. Read the post-quantum and staging code. Check the built images' headers
-   (embedded keys, counter-signature) with a script. *Status: code read, changes listed.
-   Waiting on where the firmware signing key lives.*
+   (embedded keys, counter-signature) with a script. *Status: the firmware key exists
+   (`.dabao-firmware-key/`, gitignored). Both build changes made. Boot1 built and checked: our
+   key is in slot 0, the developer key is absent. Post-quantum isn't required (only if the
+   `REQUIRE_PQ` counter is set, and it isn't). Still to do: the recovery image without `boot0`,
+   firmware signed with our key, and the A0 boot0 question above.*
 2. **Option B** on the current boot chain: the signer becomes process 3, the keystore and its
    patch go. Normal flashing.
 3. **The boot1 swap,** with the recovery image in place. The key stays as it is. Check that the
