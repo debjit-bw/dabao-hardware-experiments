@@ -405,7 +405,8 @@ confirms anything on the board. The policy is the only real approval.
 **F. Physical access is enough to get the key.** *(From the code.)*
 The board is in developer mode, so someone who can press reset and flash their own firmware
 can write a program that reads the key's slots. Slot claims protect against other processes
-in *our* firmware, not against other firmware.
+in *our* firmware, not against other firmware. (A process in our firmware could also read any
+memory through BIO DMA until the fork's third commit; see `docs/xous-core-fork.md`.)
 
 ### The simulation can differ from reality
 
@@ -476,7 +477,7 @@ Display, confirmation button, QR or air-gapped mode, block attester, EIP-712 mes
 | `.gitmodules` | Says where the `vendor/xous-core` submodule comes from. |
 | `LICENSE-MIT` | The MIT license. You may pick this one or Apache. |
 | `LICENSE-APACHE` | The Apache 2.0 license. |
-| `vendor/xous-core` | The operating system, as a git submodule. It is upstream plus two commits: a build fix for Rust 1.100, and the keystore claims. |
+| `vendor/xous-core` | The operating system, as a git submodule. It is upstream plus three commits: a build fix for Rust 1.100, the keystore claims, and a limit on BIO DMA. See `docs/xous-core-fork.md`. |
 
 ### 7.2 `crates/sim-types`: the shared language
 
@@ -621,6 +622,8 @@ No Xous code here, so it also runs on a laptop.
 | `crates/engine-spike/fixtures/guest-smoke.out.ssz` | The expected output. |
 | `crates/keystore-probe/Cargo.toml` | Package file. The `steal` feature makes it race the signer. |
 | `crates/keystore-probe/src/main.rs` | Pretends to be a hacked process and tries to read the key. Never ship it. |
+| `crates/bio-dma-probe/Cargo.toml` | Package file. |
+| `crates/bio-dma-probe/src/main.rs` | Pretends to be a hacked process that reads memory through the BIO's DMA, around the MMU and the keystore. Never ship it. |
 | `crates/lc-bench/Cargo.toml` | Package file. |
 | `crates/lc-bench/src/main.rs` | Times BLS verification on the chip. |
 
@@ -702,6 +705,7 @@ No Xous code here, so it also runs on a laptop.
 | `docs/clear-signing.md` | The display-check rules. |
 | `docs/policy.md` | The rules and counter format. |
 | `docs/keystore-slot-claims.md` | The keystore change and how it was attacked in tests. |
+| `docs/xous-core-fork.md` | Each change in our xous-core fork, and why. |
 | `docs/safe-cosigner.md` | The Safe setup and checks. |
 | `docs/postcondition.md` | The final on-chain check. |
 | `docs/agent-wallet.md` | The agent demo and what it does and doesn't prove. |

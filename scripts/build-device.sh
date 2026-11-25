@@ -64,8 +64,8 @@ fi
 
 # Image signing embeds `git describe`, which needs upstream's version tags. A clone of the fork
 # has none, so give the pinned commit's version. (Another commit must bring its own tags.)
-PINNED_REV=c8aeac994cadacee6dda0ac55889fb2b0fe141dd
-PINNED_DESCRIBE=v0.10.2-179-gc8aeac994
+PINNED_REV=b08da4ec96c9bbd01ae19420ebdd1a37fca433e7
+PINNED_DESCRIBE=v0.10.2-180-gb08da4ec9
 version_args=()
 if ! git -C "$XOUS_CORE" describe --long --match 'v[0-9]*' >/dev/null 2>&1; then
     if [ "$(git -C "$XOUS_CORE" rev-parse HEAD)" = "$PINNED_REV" ]; then

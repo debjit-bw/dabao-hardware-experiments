@@ -1,0 +1,27 @@
+[package]
+name = "bio-dma-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "TEST ONLY: plays a compromised process and reads memory through the BIO DMA engine, around the MMU and the keystore"
+publish = false
+
+[[bin]]
+name = "bio-dma-probe"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4.14"
+xous = "0.9.71"
+xous-names = { package = "xous-api-names", version = "0.9.72" }
+log-server = { package = "xous-api-log", version = "0.1.70" }
+usb-bao1x = { path = "../../vendor/xous-core/services/usb-bao1x", optional = true }
+bao1x-api = { path = "../../vendor/xous-core/libs/bao1x-api", optional = true, features = ["std"] }
+bao1x-hal = { path = "../../vendor/xous-core/libs/bao1x-hal", optional = true, features = ["std", "board-dabao"] }
+keystore-api = { path = "../../vendor/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
+xous-ipc = { version = "0.10.11", optional = true }
+utralib = { version = "0.1.27", optional = true, default-features = false }
+
+[features]
+board-dabao = ["keystore-api", "xous-ipc", "usb-bao1x", "bao1x-api", "bao1x-hal"]
+bao1x = ["utralib/bao1x", "utralib/std"]

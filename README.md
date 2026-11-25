@@ -44,7 +44,7 @@ contracts/           DabaoPostcondition (on-chain check), DemoPayRouter (demo); 
 host/dabao-host      host companion: witness building (eth_getProof), light-client sync, Safe flow
 tools/bao-mcp        MCP server: lets an agent propose Safe transactions to the board
 demo/                agent (poisoned invoice) and postcondition demos
-vendor/xous-core     submodule: xous-core fork (two commits on upstream)
+vendor/xous-core     submodule: xous-core fork (three commits on upstream)
 ```
 
 ## Build from source
@@ -65,11 +65,12 @@ scripts/build-device.sh
 `vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{loader,xous,apps}.uf2`.
 
 `vendor/xous-core` is the `dabao-hackathon` branch of debjit-bw/xous-core: btchip/xous-core
-`devcon8-workshop` at `d1d4b9bca` plus two commits, which `git -C vendor/xous-core log -p -2`
-shows in full:
+`devcon8-workshop` at `d1d4b9bca` plus three commits, which `git -C vendor/xous-core log -p -3`
+shows in full. [docs/xous-core-fork.md](docs/xous-core-fork.md) explains each one:
 
 - the Rust 1.100 `SVD_PATH` fix (betrusted-io/xous-core#1023, backported in btchip/xous-core#1);
-- per-boot keystore app-slot claims (docs/keystore-slot-claims.md).
+- per-boot keystore app-slot claims (docs/keystore-slot-claims.md);
+- BIO DMA windows only inside IFRAM, so no program can read other programs' memory through the BIO.
 
 Builds are not bit-for-bit reproducible across checkout paths. The descriptors and the policy
 are compiled into the firmware by `scripts/compile-descriptors.sh`; the blobs are checked in.
