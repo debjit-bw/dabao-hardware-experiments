@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Calldata for a tiny Uniswap V3 swap paid in ETH via SwapRouter02 (Sepolia by default).
 
-Usage: scripts/uniswap-calldata.py <from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]
+Usage: scripts/uniswap-calldata.py <from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N] [--recipient ADDR]
 
 Quotes the swap by eth_call-ing exactInputSingle from <from> with value=amount and
 amountOutMinimum=0, then sets amountOutMinimum to the quote minus N basis points (default 100 = 1%;
-the device's policy refuses more than 300). Prints the calldata: exactInputSingle(...) or multicall(deadline, [exactInputSingle(...)]).
+the device's policy refuses more than 300). --recipient pays the output to another address
+(default: <from>; the device's policy refuses any other). Prints the calldata: exactInputSingle(...) or multicall(deadline, [exactInputSingle(...)]).
 RPC_URL defaults to publicnode Sepolia. Stdlib only.
 """
 import json, os, sys, time, urllib.request
@@ -55,6 +56,11 @@ def main():
         i = argv.index("--slippage-bps")
         bps = int(argv[i + 1])
         del argv[i:i + 2]
+    recipient = None
+    if "--recipient" in argv:
+        i = argv.index("--recipient")
+        recipient = argv[i + 1]
+        del argv[i:i + 2]
     args = [a for a in argv if a != "--multicall"]
     use_mc = "--multicall" in argv
     if not args:
@@ -63,9 +69,10 @@ def main():
     amount = int(args[1]) if len(args) > 1 else 10_000_000_000      # 1e10 wei
     token_out = args[2] if len(args) > 2 else USDC
     fee = int(args[3]) if len(args) > 3 else 500
-    quote = int(eth_call(frm, ROUTER, exact_input_single(WETH, token_out, fee, frm, amount, 0), amount), 16)
+    to = recipient or frm
+    quote = int(eth_call(frm, ROUTER, exact_input_single(WETH, token_out, fee, to, amount, 0), amount), 16)
     min_out = quote * (10_000 - bps) // 10_000
-    call = exact_input_single(WETH, token_out, fee, frm, amount, min_out)
+    call = exact_input_single(WETH, token_out, fee, to, amount, min_out)
     data = multicall(int(time.time()) + 1800, [call]) if use_mc else call
     print(f"# quote: {amount} wei -> {quote} units of {token_out} (fee {fee}); amountOutMinimum {min_out}", file=sys.stderr)
     print("0x" + data)

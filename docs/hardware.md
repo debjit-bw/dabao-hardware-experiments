@@ -38,7 +38,7 @@ This is the core of the project. Three separate processes, each in its own addre
 A bug in the USB parser can't read the verifier's memory or the signer's key. Other things
 we rely on, all measured on the board:
 
-- **Memory lending.** The transport streams a request of up to 140 KiB into a buffer that Xous
+- **Memory lending.** The transport streams a request of up to 192 KiB into a buffer that Xous
   remaps into the verifier for the call, instead of copying it. That matters with 2 MiB of RAM
   shared by everything.
 - **Per-process memory limits.** Xous caps each process at 512 KiB of heap. The verifier raises

@@ -117,7 +117,7 @@ $H send-tx --chain sepolia --to 0x000000000000000000000000000000000000dEaD --val
 
 A new board makes its own key: fund that address on Sepolia first, and add `--broadcast` to
 really send. [Every command, option and script, with examples](docs/GUIDE.md#15-command-reference).
-Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/agent/api_agent.py --scenario pay|hack` (Claude API), `demo/postcondition/run.sh`.
+Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/agent/api_agent.py --scenario pay|hack|swap|swap-hack` (Claude API), `demo/postcondition/run.sh`.
 
 `RPC_URL` selects the JSON-RPC node (default: publicnode). The Safe flow needs the demo keys
 (`dabao-host safe keys` creates them in `.dabao-keys/`, which is gitignored).
@@ -133,7 +133,6 @@ Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/agent/api_agent.p
 - **The light client follows optimistic (unfinalized) headers**, trusts 2/3 of the sync
   committee and can't know that a header is the newest.
 - **Transactions from the board's own account have no postcondition.**
-- **Safe swaps don't fit on the board yet**: their witness is ~158 KB, over the 140 KiB limit.
 - **The postcondition checks only the tracked balances and some Safe settings.** It doesn't
   check approvals, NFTs or other assets.
 - **The demo Safe's agent and recovery keys are files on the same machine.** Whoever controls

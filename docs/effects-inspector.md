@@ -118,8 +118,10 @@ Effects on the device are identical to the host's. Most of the round trip is HID
    twice: the Sepolia swap fixture now peaks at 436 KB on the chip (was ~675 KB).
 
 Robustness (done):
-- The verifier refuses inputs over **140 KB** before decoding ("input too large for this
-  device"), just above the largest input measured to work (131 KB → 714 KB peak). Free RAM
+- The verifier refuses inputs over **192 KiB** before decoding ("input too large for this
+  device"). It was 140 KiB, just above the largest input then measured to work (131 KB → 714 KB
+  peak). After the memory fixes, a 161 KB Safe swap peaks at 557–573 KB, so it was raised on
+  2026-11-26. Free RAM
   can't be measured from a process: Xous's `map_memory` maps lazily (a 4 MiB probe succeeds on
   the 2 MiB chip), and touching pages to find the limit would kill the prober.
 - The transport learns that limit from the verifier at boot and refuses oversized frames from

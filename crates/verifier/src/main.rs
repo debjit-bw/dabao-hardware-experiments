@@ -403,13 +403,15 @@ const HEAP_LIMIT: usize = 1536 * 1024;
 const MODEL_BASE: usize = 350 * 1024;
 const MODEL_FACTOR_X10: usize = 35; // 3.5 x
 
-/// Largest `SimInput` accepted: just above the largest input measured to work on the board
-/// (131 KB swap, 714 KB peak heap). Physical RAM (2 MiB SRAM, shared) is the real limit, and it
-/// can't be measured from here: `map_memory` maps lazily (a 4 MiB probe succeeds on a 2 MiB
+/// Largest `SimInput` accepted. Was 140 KiB, just above the largest input then measured to work
+/// on the board (131 KB swap, 714 KB peak heap). After the 2026-11-22 memory fixes a Safe swap
+/// request (161 KB) peaks at 557-573 KB on the board, so it was raised to 192 KiB on
+/// 2026-11-26. Physical RAM (2 MiB SRAM, shared) is the real limit, and it can't be measured
+/// from here: `map_memory` maps lazily (a 4 MiB probe succeeds on a 2 MiB
 /// chip) and touching pages to find the limit would kill this process when RAM runs out.
 /// Running out of memory mid-request aborts the verifier and wedges the device until RESET, so
 /// we refuse instead. Raise only after measuring a larger input on the board.
-const MAX_INPUT: usize = 140 * 1024;
+const MAX_INPUT: usize = 192 * 1024;
 
 fn estimated_peak(input_len: usize) -> usize {
     MODEL_BASE + input_len * MODEL_FACTOR_X10 / 10

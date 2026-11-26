@@ -84,7 +84,6 @@ buffer copy).
 
 - **Valid for 10 minutes.** Within that window anyone can submit a published co-signature.
   Execute promptly, or use up the nonce.
-- **Safe swaps don't fit on the board yet**: ~158 KB witness, over the 140 KiB limit.
 - **Untracked assets aren't asserted.** A token the simulation didn't move and the policy
   doesn't list, NFTs and ERC-1155s can change at inclusion without failing the check.
 - **Slippage allowances haven't been exercised through the Safe on the board**, only ETH.

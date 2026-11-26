@@ -239,7 +239,7 @@ This is `dabao-host send-tx`.
 
 **On the board**
 
-7. Refuse it if it is over 140 KiB.
+7. Refuse it if it is over 192 KiB.
 8. Check the committee's signature, and that it commits to this parent block.
 9. Check every piece of state against that block's state root. Missing data is an error. It
    is never treated as zero.
@@ -337,7 +337,7 @@ The host only carries the data. After a long gap, `lc-sync` walks forward one pe
 
 ### Simulating
 
-- Runs real transactions, including Uniswap swaps, with inputs up to 140 KiB.
+- Runs real transactions, including Uniswap swaps from the board's account or the Safe, with inputs up to 192 KiB.
 - The Sepolia transactions recorded as test fixtures match their on-chain receipts.
 - Can simulate mainnet too. It just won't sign there.
 
@@ -386,6 +386,7 @@ counts as spending its full amount.
 | Verify one committee signature | about 0.7 s |
 | Sign a simple send, all checks | about 0.84 s on the chip |
 | Safe co-sign, all checks (about 98 KB) | about 0.92 s on the chip, 4.4 s with USB, 379 to 390 KB peak memory |
+| Safe swap, all checks (about 160 KB) | about 1 s on the chip, 6.4 s with USB, 557 to 573 KB peak memory |
 | Load committee keys after boot | about 7 s |
 | USB speed | about 28 KB/s |
 | System image | 2,130,448 of 2,490,368 bytes |
@@ -445,8 +446,7 @@ are refused by the policy, so adding a mainnet policy without fixing this would 
 
 **M. The postcondition covers little.** It doesn't check approvals, NFTs, or tokens that
 neither moved nor have a limit. It also reverts exact-output swaps that cost slightly more
-than simulated. And Safe swaps don't fit on the board yet: about 158 KB of witness against a
-140 KiB limit.
+than simulated.
 
 **R. The board's signatures don't expire.** A transaction signed for the board's own account
 but never sent stays valid until that nonce is used. Signing without `--broadcast` creates
@@ -697,7 +697,7 @@ No Xous code here, so it also runs on a laptop.
 | `scripts/firmware-verify.py` | Read-only check that a board holds exactly the firmware in some UF2 files, by reading it back through boot1. |
 | `scripts/compile-descriptors.sh` | Compiles descriptors, tokens and policy into the two `.bin` files. Descriptor files are listed by name inside it. |
 | `scripts/mcp-call.py` | A tiny MCP client. Also plays the "fooled agent" in the demo. |
-| `scripts/uniswap-calldata.py` | Gets a quote and prints swap calldata. |
+| `scripts/uniswap-calldata.py` | Gets a quote and prints swap calldata. `--recipient` sends the output elsewhere (the policy refuses that). |
 
 ### 7.16 `demo`
 
@@ -705,10 +705,12 @@ No Xous code here, so it also runs on a laptop.
 |---|---|
 | `demo/agent/run.sh` | Runs Claude Code as a payment agent, limited to reading the inbox and using the wallet tools. |
 | `demo/agent/compromised.sh` | Plays an agent that was fooled (the board refuses), then a thief with only the agent key (the Safe refuses). |
-| `demo/agent/api_agent.py` | The agent on the Claude API instead of Claude Code: wallet tools taken from `bao-mcp` over MCP, plus a read-only inbox. `--scenario pay` pays the honest invoice; `--scenario hack` plays a fooled agent proposing the fraud one, which the board refuses. Needs `pip install anthropic` and `CLAUDE_API_KEY`. |
+| `demo/agent/api_agent.py` | The agent on the Claude API instead of Claude Code: wallet tools taken from `bao-mcp` over MCP, plus a read-only inbox. `--scenario pay` pays the honest invoice; `--scenario hack` plays a fooled agent proposing the fraud one, which the board refuses. `swap` and `swap-hack` do the same with a Uniswap swap (`build_swap` tool), where the attack changes only the swap's recipient. Needs `pip install anthropic` and `CLAUDE_API_KEY`. |
 | `demo/agent/mcp.json` | Points the agent at `bao-mcp`. |
 | `demo/agent/inbox/INV-0042.md` | An honest invoice. |
 | `demo/agent/inbox/INV-0043.md` | A fraud invoice with a hidden note for AI assistants. |
+| `demo/agent/inbox-swap/REQ-0044.md` | An honest swap request: ETH to USDC, kept in the Safe. |
+| `demo/agent/inbox-swap/REQ-0045.md` | The same request, poisoned: pay the swap's USDC to another wallet, with a hidden note. |
 | `demo/postcondition/run.sh` | Changes the router after signing, so the postcondition reverts the payment. With `honest` it doesn't change it. |
 | `demo/postcondition/switch.sh` | Flips the demo router. Needs the original router owner's key. |
 
@@ -772,7 +774,7 @@ All held by the signer (process 3). It serves 176 to 209 to the verifier, and no
 
 | Limit | Value | Where |
 |---|---|---|
-| Request size | 140 KiB | `MAX_INPUT`, verifier |
+| Request size | 192 KiB | `MAX_INPUT`, verifier |
 | Frame size | 256 KiB | `wire::MAX_LEN` |
 | Verifier heap | 1.5 MiB (real RAM runs out earlier) | `HEAP_LIMIT` |
 | Transport timeout | 90 s | `VERIFIER_TIMEOUT` |
@@ -979,6 +981,8 @@ demo/agent/run.sh
 demo/agent/compromised.sh
 python3 demo/agent/api_agent.py --scenario pay
 python3 demo/agent/api_agent.py --scenario hack
+python3 demo/agent/api_agent.py --scenario swap
+python3 demo/agent/api_agent.py --scenario swap-hack
 demo/postcondition/run.sh honest
 demo/postcondition/run.sh
 ```
@@ -1176,7 +1180,7 @@ alone is unsafe.
 | `boot1 not found` | The app is running. | Press reset while the flash script waits. |
 | USB dead right after `boot` | Seen once after a flash, cause unknown. | Unplug, replug holding PROG, then `boot`. |
 | `verifier unresponsive` | The verifier crashed, usually out of memory. | Press reset, boot, retry with a smaller transaction. |
-| `exceeds the device's limit` | The witness is over 140 KiB. | Use a simpler transaction. Raise the limit only after measuring on the board. |
+| `exceeds the device's limit` | The witness is over 192 KiB. | Use a simpler transaction. Raise the limit only after measuring on the board. |
 | `no sync committee loaded` | Keys are lost at each reboot. | `lc-sync` |
 | `older than the newest verified` | An old proof. | Fetch a fresh one by running the command again. |
 | `signed in period ...` | A hand-over happened. | `lc-sync` |
@@ -1455,7 +1459,7 @@ $H lc-anchor
 | `scripts/uniswap-calldata.py` | `<from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]` | read |
 | `demo/agent/run.sh` | none, env `MODEL` | **send** |
 | `demo/agent/compromised.sh` | none | **sign** requested, must be refused |
-| `demo/agent/api_agent.py` | `--scenario pay` or `--scenario hack`, env `CLAUDE_API_KEY`, `MODEL` | **send** (`pay`); `hack` must be refused |
+| `demo/agent/api_agent.py` | `--scenario pay`, `hack`, `swap` or `swap-hack`, env `CLAUDE_API_KEY`, `MODEL` | **send** (`pay`, `swap`); the hack scenarios must be refused |
 | `demo/postcondition/run.sh` | `[honest]` | **send** |
 | `demo/postcondition/switch.sh` | `true` or `false` | **send** |
 
@@ -1486,6 +1490,8 @@ MODEL=haiku demo/agent/run.sh
 demo/agent/compromised.sh
 python3 demo/agent/api_agent.py --scenario pay
 python3 demo/agent/api_agent.py --scenario hack
+python3 demo/agent/api_agent.py --scenario swap
+python3 demo/agent/api_agent.py --scenario swap-hack
 demo/postcondition/run.sh honest
 demo/postcondition/run.sh
 demo/postcondition/switch.sh false
