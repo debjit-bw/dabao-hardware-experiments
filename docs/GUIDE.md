@@ -705,6 +705,7 @@ No Xous code here, so it also runs on a laptop.
 |---|---|
 | `demo/agent/run.sh` | Runs Claude Code as a payment agent, limited to reading the inbox and using the wallet tools. |
 | `demo/agent/compromised.sh` | Plays an agent that was fooled (the board refuses), then a thief with only the agent key (the Safe refuses). |
+| `demo/agent/api_agent.py` | The agent on the Claude API instead of Claude Code: wallet tools taken from `bao-mcp` over MCP, plus a read-only inbox. `--scenario pay` pays the honest invoice; `--scenario hack` plays a fooled agent proposing the fraud one, which the board refuses. Needs `pip install anthropic` and `CLAUDE_API_KEY`. |
 | `demo/agent/mcp.json` | Points the agent at `bao-mcp`. |
 | `demo/agent/inbox/INV-0042.md` | An honest invoice. |
 | `demo/agent/inbox/INV-0043.md` | A fraud invoice with a hidden note for AI assistants. |
@@ -976,6 +977,8 @@ access on this computer can read both Safe keys, so don't rely on this setup for
 ```sh
 demo/agent/run.sh
 demo/agent/compromised.sh
+python3 demo/agent/api_agent.py --scenario pay
+python3 demo/agent/api_agent.py --scenario hack
 demo/postcondition/run.sh honest
 demo/postcondition/run.sh
 ```
@@ -1452,6 +1455,7 @@ $H lc-anchor
 | `scripts/uniswap-calldata.py` | `<from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]` | read |
 | `demo/agent/run.sh` | none, env `MODEL` | **send** |
 | `demo/agent/compromised.sh` | none | **sign** requested, must be refused |
+| `demo/agent/api_agent.py` | `--scenario pay` or `--scenario hack`, env `CLAUDE_API_KEY`, `MODEL` | **send** (`pay`); `hack` must be refused |
 | `demo/postcondition/run.sh` | `[honest]` | **send** |
 | `demo/postcondition/switch.sh` | `true` or `false` | **send** |
 
@@ -1480,6 +1484,8 @@ Demos (these send):
 demo/agent/run.sh
 MODEL=haiku demo/agent/run.sh
 demo/agent/compromised.sh
+python3 demo/agent/api_agent.py --scenario pay
+python3 demo/agent/api_agent.py --scenario hack
 demo/postcondition/run.sh honest
 demo/postcondition/run.sh
 demo/postcondition/switch.sh false

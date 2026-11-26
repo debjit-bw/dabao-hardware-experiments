@@ -15,3 +15,5 @@ __pycache__/
 logs/
 .venv-flash/
 .dabao-firmware-key/
+
+*.env

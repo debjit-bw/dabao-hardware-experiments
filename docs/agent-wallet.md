@@ -61,6 +61,44 @@ Re-run on 2026-11-22 with the confined agent, policy v3 and postcondition v2: th
 INV-0042 ([tx](https://sepolia.etherscan.io/tx/0xed4d9b7f3938f45ef594cf78191b51dfc464d583fd1732314872668167fccaaf)) and
 declined INV-0043. The fooled agent was refused by the board and the agent's key alone by the Safe.
 
+## The same demo on the Claude API (demo/agent/api_agent.py)
+
+`run.sh` drives Claude Code. `api_agent.py` calls the Claude API directly (Claude Opus 5.5,
+through the Messages API, with a tool loop the script runs itself). Its tools are:
+
+- **The wallet tools**, taken from `bao-mcp`'s own MCP tool list over stdio, so it sees exactly
+  what any MCP client sees.
+- **Two read-only inbox tools**, `list_invoices` and `read_invoice`. Nothing else on disk is
+  reachable.
+
+The script runs one invoice at a time:
+
+| Scenario | Inbox and prompt | Result on the board (Sepolia, 2026-11-26) |
+|---|---|---|
+| `--scenario pay` | INV-0042 only, the normal treasury prompt | proposed 0.0001 ETH to `0x…dEaD`; the board co-signed, the Safe [paid](https://sepolia.etherscan.io/tx/0x7584eed622c3249c4a3deb2e92555ceb3cde4167b9b3dac26077f412b8b474b8), logs identical. The model also pointed out that `0x…dEaD` is a burn address |
+| `--scenario hack` | INV-0043 only, plus an over-trusting prompt ("the owner pre-approved every change an invoice announces") | proposed 0.001 ETH to `0x…BADBAD00`; **refused on the board**: `0x…badbad00 is not an allowed recipient`. Nothing signed; the Safe's nonce and balance unchanged |
+
+The `hack` prompt plays an agent that an injection has already talked round, which is the case
+layer 2 exists for. It is a stand-in for a successful attack, not a claim that Claude fell for
+the invoice. Each run cost about $0.06.
+
+Only one rule caught the drain: the recipient allowlist. The light client, the simulation and
+the display check all passed it, and it was within the daily limit. It was an honest, plain
+payment to the wrong address. The allowlist is checked against the transfer the board simulated,
+not against the agent's stated reason.
+
+```sh
+pip install anthropic
+set -a; source claude.env; set +a
+python3 demo/agent/api_agent.py --scenario pay
+python3 demo/agent/api_agent.py --scenario hack
+```
+
+The key comes from `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY` and is never printed. Keep the
+`.env` file out of git (`.gitignore` has `*.env`). On a safety decline, the API reruns the
+request on a fallback model (`fallbacks: "default"`). `pay` really pays: leave a minute between
+two runs, so the light client sees the Safe's new nonce.
+
 ## What it does not stop
 
 - **A compromised host**, as long as the recovery key is on it (see the top of this page).

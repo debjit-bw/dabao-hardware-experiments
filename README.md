@@ -117,7 +117,7 @@ $H send-tx --chain sepolia --to 0x000000000000000000000000000000000000dEaD --val
 
 A new board makes its own key: fund that address on Sepolia first, and add `--broadcast` to
 really send. [Every command, option and script, with examples](docs/GUIDE.md#15-command-reference).
-Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/postcondition/run.sh`.
+Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/agent/api_agent.py --scenario pay|hack` (Claude API), `demo/postcondition/run.sh`.
 
 `RPC_URL` selects the JSON-RPC node (default: publicnode). The Safe flow needs the demo keys
 (`dabao-host safe keys` creates them in `.dabao-keys/`, which is gitignored).
