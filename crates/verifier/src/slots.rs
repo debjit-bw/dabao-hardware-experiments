@@ -1,100 +1,74 @@
 //! Adapted from btchip/ethereum-app dabao-app-eth-burner (MIT OR Apache-2.0), with changes:
-//! the keystore calls.
+//! the storage calls.
 //!
-//! Claimed keystore app slots (32 bytes each, RRAM) on the device, or a host file (emulator).
-//!
-//! Device: `base..base + len` claimed with our keystore patch (`AppKey::Claim`,
-//! docs/keystore-slot-claims.md) at boot, before the verifier registers its server, so the
-//! claim precedes any host input. Ranges in use: BIO 0..123, eth-burner 132..134, signer
-//! 160..162, policy counters 176..208, light client 208..210.
+//! 32-byte app slots for the verifier's persistent state, served by the signer
+//! (`sim_types::ipc::SLOTS_SERVER_NAME`). The signer runs as PID 3 in place of the keystore
+//! and is the only process that maps the RRAM slots; on the emulator it keeps them in host
+//! files. Every call carries the per-boot token the signer handed over in `OP_SIGNER_WAIT`.
+//! The signer serves only `ipc::VERIFIER_SLOTS` (policy counters 176..208, light client
+//! 208..210), and only to the first process that presented the token.
+
+use sim_types::ipc;
+
+pub type Token = [u8; ipc::SLOT_TOKEN_LEN];
 
 pub struct Slots {
-    #[cfg(all(target_os = "xous", feature = "board-dabao"))]
-    cid: xous::CID,
-    #[cfg(not(all(target_os = "xous", feature = "board-dabao")))]
-    path: std::path::PathBuf,
+    cid: Option<xous::CID>,
+    token: Token,
     base: usize,
     len: usize,
-    /// The claim succeeded (device) / storage is usable.
+    /// The signer's slot server is reachable / storage is usable.
     pub ok: bool,
 }
 
-#[cfg(all(target_os = "xous", feature = "board-dabao"))]
 impl Slots {
-    pub fn open(base: usize, len: usize, what: &str) -> Slots {
-        use keystore_api::{APPKEY_GUARD, AppKey};
+    /// `token`: None if no signer attached in time; every call then fails (fail closed).
+    pub fn open(range: core::ops::Range<usize>, what: &str, token: Option<Token>) -> Slots {
+        let (base, len) = (range.start, range.len());
+        let Some(token) = token else {
+            log::error!("app slots {base}..{} ({what}): no signer attached", range.end);
+            return Slots { cid: None, token: [0; ipc::SLOT_TOKEN_LEN], base, len, ok: false };
+        };
         let xns = xous_names::XousNames::new().unwrap();
-        let cid = xns.request_connection_blocking(keystore_api::SERVER_NAME_KEYS).expect("keystore");
-        let mut s = Slots { cid, base, len, ok: true };
-        match s.call(AppKey::Claim { guard: APPKEY_GUARD, start: base, len }) {
-            AppKey::Success => log::info!("claimed keystore app slots {base}..{} ({what})", base + len),
-            e => {
-                log::error!("can't claim keystore app slots {base}..{} ({what}): {e:?}", base + len);
-                s.ok = false;
-            }
-        }
-        s
+        let cid = xns.request_connection_blocking(ipc::SLOTS_SERVER_NAME).ok();
+        log::info!("app slots {base}..{} ({what}) via the signer: {}", range.end, if cid.is_some() { "connected" } else { "unreachable" });
+        Slots { cid, token, base, len, ok: cid.is_some() }
     }
 
-    fn call(&self, op: keystore_api::AppKey) -> keystore_api::AppKey {
-        use keystore_api::AppKey;
-        let Ok(mut buf) = xous_ipc::Buffer::into_buf(op) else { return AppKey::InternalError };
-        if buf.lend_mut(self.cid, keystore_api::Opcode::AppKeyOp as u32).is_err() {
-            return AppKey::InternalError;
+    fn call(&self, op: usize, i: usize, data: Option<&[u8; 32]>) -> Option<Vec<u8>> {
+        let cid = self.cid?;
+        let mut req = self.token.to_vec();
+        req.extend_from_slice(&((self.base + i) as u32).to_be_bytes());
+        if let Some(d) = data {
+            req.extend_from_slice(d);
         }
-        buf.to_original::<AppKey, _>().unwrap_or(AppKey::InternalError)
+        let mut range = xous::map_memory(None, None, 4096, xous::MemoryFlags::R | xous::MemoryFlags::W).ok()?;
+        unsafe { range.as_slice_mut::<u8>()[..req.len()].copy_from_slice(&req) };
+        let r = xous::send_message(cid, xous::Message::new_lend_mut(op, range, None, xous::MemorySize::new(req.len())));
+        let out = match r {
+            Ok(xous::Result::MemoryReturned(_, Some(v))) => Some(unsafe { range.as_slice::<u8>()[..v.get().min(4096)].to_vec() }),
+            _ => None,
+        };
+        // the token was in this page: clear it before handing the page back
+        unsafe { range.as_slice_mut::<u8>()[..ipc::SLOT_TOKEN_LEN].fill(0) };
+        xous::unmap_memory(range).ok();
+        out
     }
 
     pub fn read(&mut self, i: usize) -> Option<[u8; 32]> {
-        use keystore_api::{APPKEY_GUARD, AppKey};
         if i >= self.len {
             return None;
         }
-        match self.call(AppKey::ReadRequest { guard: APPKEY_GUARD, index: self.base + i }) {
-            AppKey::ReadResponse { data } => Some(data),
-            e => {
-                log::error!("app slot {}: read {e:?}", self.base + i);
+        match self.call(ipc::OP_SLOT_READ, i, None) {
+            Some(d) if d.len() == 32 => d.try_into().ok(),
+            _ => {
+                log::error!("app slot {}: read refused or failed", self.base + i);
                 None
             }
         }
     }
 
     pub fn write(&mut self, i: usize, data: &[u8; 32]) -> bool {
-        use keystore_api::{APPKEY_GUARD, AppKey};
-        i < self.len && matches!(self.call(AppKey::Write { guard: APPKEY_GUARD, index: self.base + i, data: *data }), AppKey::Success)
-    }
-}
-
-/// Emulator: `target/dabao-slots-<base>.bin` in this crate (or `$DABAO_SLOTS_DIR`).
-#[cfg(not(all(target_os = "xous", feature = "board-dabao")))]
-impl Slots {
-    pub fn open(base: usize, len: usize, what: &str) -> Slots {
-        let dir = std::env::var_os("DABAO_SLOTS_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
-        let path = dir.join(format!("dabao-slots-{base}.bin"));
-        log::info!("emulated app slots {base}..{} ({what}): {path:?}", base + len);
-        Slots { path, base, len, ok: true }
-    }
-
-    fn load(&self) -> Vec<u8> {
-        std::fs::read(&self.path).ok().filter(|d| d.len() == 32 * self.len).unwrap_or_else(|| vec![0; 32 * self.len])
-    }
-
-    pub fn read(&mut self, i: usize) -> Option<[u8; 32]> {
-        let _ = self.base;
-        (i < self.len).then(|| self.load()[32 * i..32 * i + 32].try_into().unwrap())
-    }
-
-    pub fn write(&mut self, i: usize, data: &[u8; 32]) -> bool {
-        if i >= self.len {
-            return false;
-        }
-        let mut d = self.load();
-        d[32 * i..32 * i + 32].copy_from_slice(data);
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
-        std::fs::write(&self.path, d).is_ok()
+        i < self.len && matches!(self.call(ipc::OP_SLOT_WRITE, i, Some(data)).as_deref(), Some([1]))
     }
 }

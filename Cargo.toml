@@ -15,6 +15,7 @@ members = [
     "crates/signer",
     "crates/keystore-probe",
     "crates/bio-dma-probe",
+    "crates/slot-probe",
     "host/dabao-host",
     "tools/bao-mcp",
 ]

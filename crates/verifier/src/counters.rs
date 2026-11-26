@@ -1,12 +1,9 @@
-//! Persistent daily-spending counters for the policy: one 32-byte keystore app slot per limit
-//! (device, `crate::slots`), or a host file (emulator).
+//! Persistent daily-spending counters for the policy: one 32-byte app slot per limit, slots
+//! `ipc::COUNTER_SLOTS` (176..208), kept by the signer (`crate::slots`). Opened at boot, before
+//! the verifier registers its server, so before any host input. Other users of app slots:
+//! BIO 0..123, eth-burner 132..134, signer 160..162.
 //!
-//! Device: slots `BASE..BASE + policy::MAX_LIMITS` (176..208), claimed with our keystore patch
-//! (`AppKey::Claim`, docs/keystore-slot-claims.md) at boot, before the verifier registers its
-//! server, so the claim precedes any host input. Other users of app slots: BIO 0..123,
-//! eth-burner 132..134, signer 160..162.
-//!
-//! Fail closed: if the claim or a read fails, `Counters::ok()` is false and the verifier refuses
+//! Fail closed: if the slots are unavailable or a read fails, `Counters::ok()` is false and the verifier refuses
 //! to sign (spending can't be limited without knowing what was spent). A failed write refuses
 //! the transaction being signed.
 
@@ -19,8 +16,9 @@ pub struct Counters {
 }
 
 impl Counters {
-    pub fn open(p: &Policy) -> Counters {
-        let mut store = crate::slots::Slots::open(176, MAX_LIMITS, "policy counters");
+    pub fn open(p: &Policy, token: Option<crate::slots::Token>) -> Counters {
+        const _: () = assert!(sim_types::ipc::COUNTER_SLOTS.end - sim_types::ipc::COUNTER_SLOTS.start == MAX_LIMITS);
+        let mut store = crate::slots::Slots::open(sim_types::ipc::COUNTER_SLOTS, "policy counters", token);
         let mut ok = store.ok;
         let mut values = Vec::new();
         for (i, chain, l) in p.limits() {

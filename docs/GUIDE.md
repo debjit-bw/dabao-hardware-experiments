@@ -169,13 +169,17 @@ transactions. It is not safe for real money.
 - **Transport** reads bytes from an untrusted computer, which is where bugs get exploited. So
   it holds nothing valuable and understands almost nothing.
 - **Verifier** does all the hard thinking. It has no key.
-- **Signer** has the key and does almost nothing else. Nobody can send it a request. It asks
-  the verifier for work and waits.
+- **Signer** has the key and does almost nothing else. Nobody can send it a signing request.
+  It asks the verifier for work and waits. It's also the only process that can reach the
+  board's storage slots, and it keeps the verifier's counters for it.
 
-Separate processes only help if the key can't be fetched another way. Stock keystore on this
-board lets any process read any app slot. Our one-commit change to xous-core adds "claims":
-the first process to claim a slot owns it until reboot. The signer and verifier claim their
-slots at boot, before any host byte is read.
+Separate processes only help if the key can't be fetched another way. Upstream, a keystore
+process reads and writes the storage slots for anyone who asks. Our image leaves it out: the
+signer runs as process 3 in its place, the one number the chip's storage hardware trusts, and
+maps the slots itself at boot. The kernel gives each page to one process only, so nobody else
+can map them. The verifier gets its spending counters and light-client state from the signer,
+with a password made fresh at every boot that only the verifier receives. The signer never
+serves the key's slots. Details: `docs/xous-core-fork.md`, section 4.
 
 ### Who is trusted for what
 
@@ -187,15 +191,15 @@ slots at boot, before any host byte is read.
 | Signer | keeping and using the key | judging a transaction |
 | Firmware | all built-in rules: anchor, policy, descriptors, tokens | |
 | Sync committee | saying which block is real, if 2/3 are honest | |
-| xous-core: kernel, keystore, loader | process separation and slot claims | |
+| xous-core: kernel, loader | process separation, giving each page to one process | |
 
 ### Where the code lives on the chip
 
 | Image | Contains | Flash it after changing |
 |---|---|---|
 | `loader.uf2` | Xous loader | on a board's first flash, then only if xous-core's loader changes |
-| `xous.uf2`, the system image | kernel, Xous services, **verifier** | verifier, policy, descriptors, light client, EVM, keystore |
-| `apps.uf2`, the apps image | **transport**, **signer** | transport, signer |
+| `xous.uf2`, the system image | kernel, Xous services, **verifier**, **signer** | verifier, signer, policy, descriptors, light client, EVM |
+| `apps.uf2`, the apps image | **transport** | transport |
 
 If you change `crates/sim-types`, flash both `xous.uf2` and `apps.uf2`, and rebuild the host.
 
@@ -205,12 +209,15 @@ If you change `crates/sim-types`, flash both `xous.uf2` and `apps.uf2`, and rebu
 
 ### 4.1 When the board starts
 
-1. The verifier raises its memory cap from 512 KiB to 1.5 MiB.
-2. It claims its storage slots, then loads the spending counters and light-client state.
-3. The signer claims slots 160 and 161, then loads its key. On the very first boot it makes
-   one from the hardware random number generator.
-4. The signer connects to the verifier and reports its address.
-5. Only now does the transport start reading USB.
+1. The signer starts as process 3. It checks that number, switches on time-slicing (in
+   upstream Xous the keystore does that), and maps the storage slots and the storage
+   controller.
+2. It loads its key from slots 160 and 161. On the very first boot it makes one from the
+   hardware random number generator.
+3. The verifier raises its memory cap from 512 KiB to 1.5 MiB.
+4. The signer connects to the verifier and reports its address and this boot's password.
+5. The verifier loads the spending counters and light-client state through the signer.
+6. Only now does the transport start reading USB.
 
 The committee's 512 public keys live in RAM, so the host uploads them again after each boot.
 The board accepts them only if they hash to the root it saved. This takes about 7 seconds.
@@ -404,8 +411,8 @@ confirms anything on the board. The policy is the only real approval.
 
 **F. Physical access is enough to get the key.** *(From the code.)*
 The board is in developer mode, so someone who can press reset and flash their own firmware
-can write a program that reads the key's slots. Slot claims protect against other processes
-in *our* firmware, not against other firmware. (A process in our firmware could also read any
+can write a program that reads the key's slots. The signer holding them as process 3 protects
+against other processes in *our* firmware, not against other firmware. (A process in our firmware could also read any
 memory through BIO DMA until the fork's third commit; see `docs/xous-core-fork.md`.)
 
 ### The simulation can differ from reality
@@ -477,7 +484,7 @@ Display, confirmation button, QR or air-gapped mode, block attester, EIP-712 mes
 | `.gitmodules` | Says where the `vendor/xous-core` submodule comes from. |
 | `LICENSE-MIT` | The MIT license. You may pick this one or Apache. |
 | `LICENSE-APACHE` | The Apache 2.0 license. |
-| `vendor/xous-core` | The operating system, as a git submodule. It is upstream plus three commits: a build fix for Rust 1.100, the keystore claims, and a limit on BIO DMA. See `docs/xous-core-fork.md`. |
+| `vendor/xous-core` | The operating system, as a git submodule. It is upstream plus six commits: a build fix for Rust 1.100, the keystore claims (no longer used), a limit on BIO DMA, two for building our own boot1 (built, never installed), and `--trusted-service`, which makes the signer process 3. See `docs/xous-core-fork.md`. |
 
 ### 7.2 `crates/sim-types`: the shared language
 
@@ -526,9 +533,9 @@ Inside `main.rs`:
 
 | File | What it does |
 |---|---|
-| `crates/verifier/Cargo.toml` | Package file. `board-dabao` switches storage from files to keystore slots. |
+| `crates/verifier/Cargo.toml` | Package file. `board-dabao` has no effect any more (storage is the signer's job). |
 | `crates/verifier/src/main.rs` | The brain. See below. |
-| `crates/verifier/src/slots.rs` | Permanent storage: claimed keystore slots on the board, a file in the emulator. |
+| `crates/verifier/src/slots.rs` | Permanent storage, asked of the signer's slot server with this boot's password. |
 | `crates/verifier/src/counters.rs` | Loads and saves the daily spending counters. An unreadable counter means no signing. |
 | `crates/verifier/src/lc.rs` | Light-client state: saved root, period and newest slot, plus keys in RAM. Has `load`, `update`, `check` and `ratchet`. |
 
@@ -541,15 +548,15 @@ Inside `main.rs`:
 - `start_signer_channel` and `SignerLink`: the private line to the signer.
 - `sign_request`: approve, save, then ask the signer.
 - `MAX_INPUT` and `raise_heap_limit`: the memory limits.
-- `main`: claims storage, opens both servers, answers requests forever.
+- `main`: waits for the signer's password, loads storage, opens both servers, answers requests forever.
 
 ### 7.5 `crates/signer`: process 3
 
 | File | What it does |
 |---|---|
 | `crates/signer/Cargo.toml` | Package file. |
-| `crates/signer/src/main.rs` | Waits for a job, builds the hash, signs. For a Safe it signs only a DELEGATECALL to MultiSendCallOnly with three calls: begin, the call, check. |
-| `crates/signer/src/store.rs` | Creates, saves and loads the key. It writes the key first and a checksum header last. It never replaces a key it failed to read. **Don't change the slot layout: you would lose the account.** |
+| `crates/signer/src/main.rs` | Checks it is process 3, switches on time-slicing, serves the verifier's slots (password, verifier only, never the key's), and in a second thread waits for a job, builds the hash, signs. For a Safe it signs only a DELEGATECALL to MultiSendCallOnly with three calls: begin, the call, check. `DABAO_SIGNER_ADDRESS` at build time: never create a key, refuse any other. |
+| `crates/signer/src/store.rs` | Maps the RRAM slots directly (board) or uses files (emulator). Creates, saves and loads the key. It writes the key first and a checksum header last. It never replaces a key it failed to read. **Don't change the slot layout: you would lose the account.** |
 
 ### 7.6 `crates/xous-evm`: running transactions
 
@@ -620,10 +627,12 @@ No Xous code here, so it also runs on a laptop.
 | `crates/engine-spike/fixtures/README.md` | Where its test block came from. |
 | `crates/engine-spike/fixtures/guest-smoke.in.ssz` | Test block input. |
 | `crates/engine-spike/fixtures/guest-smoke.out.ssz` | The expected output. |
-| `crates/keystore-probe/Cargo.toml` | Package file. The `steal` feature makes it race the signer. |
-| `crates/keystore-probe/src/main.rs` | Pretends to be a hacked process and tries to read the key. Never ship it. |
+| `crates/slot-probe/Cargo.toml` | Package file. |
+| `crates/slot-probe/src/main.rs` | Pretends to be a hacked process and tries every way to the storage slots: the keystore, the signer's slot server without the password, mapping the hardware. Never ship it. |
+| `crates/keystore-probe/Cargo.toml` | Package file. The `steal` feature makes it race the signer. Needs the old keystore image (main at `5181823`). |
+| `crates/keystore-probe/src/main.rs` | The old test, for keystore claims. Never ship it. |
 | `crates/bio-dma-probe/Cargo.toml` | Package file. |
-| `crates/bio-dma-probe/src/main.rs` | Pretends to be a hacked process that reads memory through the BIO's DMA, around the MMU and the keystore. Never ship it. |
+| `crates/bio-dma-probe/src/main.rs` | Pretends to be a hacked process that reads memory through the BIO's DMA, around the MMU. Writes its test value through the keystore, so needs the old image (main at `5181823`). Never ship it. |
 | `crates/lc-bench/Cargo.toml` | Package file. |
 | `crates/lc-bench/src/main.rs` | Times BLS verification on the chip. |
 
@@ -705,7 +714,7 @@ No Xous code here, so it also runs on a laptop.
 | `docs/effects-inspector.md` | The effect list and the memory lessons. |
 | `docs/clear-signing.md` | The display-check rules. |
 | `docs/policy.md` | The rules and counter format. |
-| `docs/keystore-slot-claims.md` | The keystore change and how it was attacked in tests. |
+| `docs/keystore-slot-claims.md` | The old keystore change and how it was attacked in tests. Superseded by the signer as process 3. |
 | `docs/xous-core-fork.md` | Each change in our xous-core fork, and why. |
 | `docs/hardware.md` | What the chip offers, what we use, and how. |
 | `docs/custom-boot1.md` | The plan for our own boot1 and a hardware-protected key. Not done yet. |
@@ -737,7 +746,9 @@ Bodies are RLP, Ethereum's simple binary format. The device is USB `1d50:6197`, 
 | `0x19` | light-client status | nothing | `lc::Status` |
 | `0x7f` | error | (reply only) | text |
 
-### Keystore app slots
+### RRAM app slots
+
+All held by the signer (process 3). It serves 176 to 209 to the verifier, and nothing else to anyone.
 
 | Slots | Owner | Contents |
 |---|---|---|
@@ -1010,16 +1021,16 @@ forge test --fork-url https://ethereum-sepolia-rpc.publicnode.com
 
 They depend on the live demo Safe.
 
-### Keystore attack test, on the board
+### Storage attack test, on the board
 
 ```sh
 T=riscv32imac-unknown-xous-elf
-cargo build --release -p keystore-probe --target $T --features board-dabao,bao1x
-GENERIC_HID=0 scripts/build-device.sh target/$T/release/keystore-probe
-scripts/flash-and-log.py --until "PROBE summary" vendor/xous-core/target/$T/release/{xous,apps}.uf2
+cargo build --release -p slot-probe --target $T --features board-dabao,bao1x
+GENERIC_HID=0 scripts/build-device.sh target/$T/release/slot-probe
+scripts/flash-and-log.py --until "PROBE summary" vendor/xous-core/target/$T/release/{loader,xous,apps}.uf2
 ```
 
-Add `steal` to the features to test the race. Flash the normal image again afterwards.
+Expect `PROBE summary: 10/10 as expected`. Flash the normal image again afterwards.
 
 ### BLS benchmark, on the board
 
@@ -1129,7 +1140,7 @@ alone is unsafe.
 ### Rules not to break
 
 - Don't move or reformat slots 160 and 161. That is the account's key.
-- Don't add a process that reads outside input before the signer has claimed its slots.
+- Don't add a process that reads outside input before the signer has attached to the verifier.
 - Don't let the host supply policy, descriptors, tokens or the anchor at run time.
 - Don't make missing witness data read as zero.
 - Don't make the signer accept a hash. It must always build its own.
@@ -1156,13 +1167,13 @@ alone is unsafe.
 | `keeps ...` | The called contract would hold on to funds, for example excess ETH in a router. | Send the exact amount. |
 | `Dabao: expired` | Over 10 minutes between signing and executing. | Sign again. |
 | `daily limit` | Budget used, possibly by unsent signatures. | Wait for the next UTC day. |
-| `policy counters unreadable` | A slot claim or read failed. | Reboot. Check that the image has the keystore change. |
+| `policy counters unreadable` | The signer didn't attach within 30 s, or a slot read failed. | Reboot. Check the signer's log line. |
 | `SemVer::from_git: no major version` | xous-core has no version tags and isn't at the pinned commit. | Fetch upstream's tags (the build script prints the command), or check out the pin. |
 | `nonce too low`, or `GS026` when executing | The light client trails the head, so it still saw the previous nonce. | Wait a minute and sign again. |
 | `zsh: parse error near '#'`, or odd `unknown option` errors | A pasted `#` comment became arguments. | Leave the comment out, or `setopt interactive_comments`. |
 | `--chain` seems ignored | `RPC_URL` is set. | `unset RPC_URL`. |
 | `historical state ... is not available` | The RPC can't serve proofs that old. | Use a node with a wider window. |
-| `signer attached` never happens | The slot claim failed, or the key is unreadable. | Read the console or DUART log. Don't erase the slots. |
+| `signer attached` never happens | The signer isn't process 3, the key is unreadable, or it isn't the address `DABAO_SIGNER_ADDRESS` expects. | Read the console or DUART log. Don't erase the slots. |
 | `MPT: unresolved node access` or `not in witness` | The witness lacks data the run needed, or an account involved has EIP-7702 delegation (hole S). | Rebuild it on the same block. Delegated accounts aren't supported. |
 | `quote failed` | The `<from>` account lacks the ETH, or the pool can't fill the swap. | Fund it, or use another amount. |
 | `exceeds maximum proof window` | The public node moved on, or keeps recent state only. | Run it again. For older transactions set `RPC_URL`. |
@@ -1415,7 +1426,7 @@ $H lc-anchor
 
 | Script | Arguments | Mark |
 |---|---|---|
-| `scripts/build-device.sh` | `[app ELF or xous-core app name] [extra xtask args]`, env `SERVICE`, `GENERIC_HID` | file |
+| `scripts/build-device.sh` | `[app ELF or xous-core app name] [extra xtask args]`, env `SERVICE`, `GENERIC_HID`, `DABAO_SIGNER_ADDRESS`, `FIRMWARE_KEY` | file |
 | `scripts/run-emu.sh` | none, env `DABAO_PORT` | file |
 | `scripts/flash-and-log.py` | `[--wait SECS] [--log-secs SECS] [--until TEXT] file.uf2...` | **flash** |
 | `scripts/board-audit.py` | `[serial port]`. The board must be in boot1 | read |
@@ -1550,8 +1561,9 @@ These come from xous-core's bootloader. Type them on the board's boot1 serial po
 | `BAO_MCP_DRY_RUN` | `bao-mcp` | Co-sign but don't execute. |
 | `MODEL` | agent demo | `sonnet` (default) or `haiku`. |
 | `DABAO_PORT` | emulator | TCP port (default 7610). |
-| `DABAO_SIGNER_KEY` | emulator | Key file. |
-| `DABAO_SLOTS_DIR` | emulator | Folder for fake slots. |
+| `DABAO_SIGNER_KEY` | emulator | Key file (default `crates/signer/target/dabao-signer-key.bin`). |
+| `DABAO_SLOTS_DIR` | emulator | Folder for fake slots (default `crates/signer/target/`). |
+| `DABAO_SIGNER_ADDRESS` | build script | The signer then never creates a key and refuses to run unless the slots hold this address's key. Use it when changing storage code on a board with a funded key. |
 | `DABAO_XOUS_CORE` | scripts | A different xous-core checkout. (A plain `XOUS_CORE` is ignored on purpose.) |
 | `SERVICE` | build script | Program for the system image (default `verifier`). |
 | `GENERIC_HID` | build script | `0` gives a USB console instead of the HID transport. |

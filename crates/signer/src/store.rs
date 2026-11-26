@@ -1,115 +1,149 @@
 //! Adapted from btchip/ethereum-app dabao-app-eth-burner (MIT OR Apache-2.0), with changes:
 //! the key storage.
 //!
-//! Key storage: two 32-byte keystore app slots (device) or a host file (emulator).
-//! * slot 0: the secp256k1 secret key;
-//! * slot 1: `MAGIC` and the first 24 bytes of SHA-256(key), written last, so a key is only
-//!   used once it is completely stored.
+//! Persistent storage: 32-byte RRAM app slots (device) or host files (emulator).
+//! * slots 160..162, the key: slot 160 holds the secp256k1 secret key; slot 161 `MAGIC` and the
+//!   first 24 bytes of SHA-256(key), written last, so a key is only used once it is completely
+//!   stored. Never served to anyone.
+//! * `ipc::VERIFIER_SLOTS` (176..210): the verifier's policy counters and light-client state,
+//!   served to it by `crate::serve_slots`.
 //!
-//! Isolation (device): stock dabao keystore lets any process read any app slot. Our keystore
-//! patch (vendor/xous-core top commit, docs/keystore-slot-claims.md) adds
-//! `AppKey::Claim`: the first process to claim a slot range owns it until reboot. The signer
-//! claims its two slots before touching them and refuses to run if the claim fails. The
-//! transport reads no host input until the signer is attached, so the claim always comes
-//! before any untrusted input is processed.
+//! Isolation (device): the signer is PID 3, in place of the keystore (fork xtask
+//! `--trusted-service`), so there is no keystore and no keystore patch. The signer maps the
+//! RRAM data-slot region, its access-control region and the RRAM controller itself, at
+//! startup; the kernel gives each physical page to one process only, so no other process can
+//! map them afterwards. The slots are "open" (no hardware owner), so it's page ownership that
+//! protects them, as before; PID 3 is also the one process the RRAM hardware treats as the
+//! trusted user. Index mapping: app slot `i` is data slot `APPLICATION.base + i`, as in the
+//! keystore's `read_app_key` / `write_app_key`, so the key is found where the keystore kept it.
 
 use k256::ecdsa::SigningKey;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-// DO NOT CHANGE the slot layout (BASE, LEN, MAGIC, header format): the key stored here is the
+// DO NOT CHANGE the slot layout (KEY_BASE, MAGIC, header format): the key stored here is the
 // project's persistent, funded testnet account (board address
 // 0x7813e1C142086D37060Be2335ff9Dd4EA4a2F986). Changing it makes the signer look in the wrong
 // place and create a new key; the old one would still be in RRAM but unused.
 const MAGIC: &[u8; 8] = b"DABAOSG1";
-type Slot = [u8; 32];
+pub const KEY_BASE: usize = 160;
+pub const KEY_SLOTS: core::ops::Range<usize> = KEY_BASE..KEY_BASE + 2;
+pub type Slot = [u8; 32];
 
-trait Slots {
-    fn read(&mut self, i: usize) -> Option<Slot>;
-    fn write(&mut self, i: usize, data: &Slot) -> bool;
+/// App slots by absolute index.
+pub trait Slots {
+    fn read(&mut self, index: usize) -> Option<Slot>;
+    fn write(&mut self, index: usize, data: &Slot) -> bool;
 }
 
-/// Keystore application slots (`AppKeyOp`). BIO uses 0..123, eth-burner 132..133.
+/// The RRAM app slots, mapped directly (we are PID 3; nobody else maps them).
 #[cfg(target_os = "xous")]
-struct Keystore(xous::CID);
+pub struct Rram {
+    mgr: bao1x_hal::acram::SlotManager,
+    rram: core::pin::Pin<Box<bao1x_hal::rram::Reram>>,
+}
 
 #[cfg(target_os = "xous")]
-impl Keystore {
-    const BASE: usize = 160;
-    const LEN: usize = 2;
-
-    /// Connect and claim our slots. Panics if the claim is refused: then another process
-    /// owns (and may have read or replaced) them, and the key must not be used.
-    fn open() -> Self {
-        use keystore_api::{APPKEY_GUARD, AppKey};
-        let xns = xous_names::XousNames::new().unwrap();
-        let ks = Keystore(xns.request_connection_blocking(keystore_api::SERVER_NAME_KEYS).expect("keystore"));
-        match ks.call(AppKey::Claim { guard: APPKEY_GUARD, start: Self::BASE, len: Self::LEN }) {
-            AppKey::Success => log::info!("claimed keystore app slots {}..{}", Self::BASE, Self::BASE + Self::LEN),
-            e => panic!("can't claim keystore app slots {}..{}: {e:?}", Self::BASE, Self::BASE + Self::LEN),
-        }
-        ks
+impl Rram {
+    /// Maps the RRAM controller, the data slots and their ACLs. Panics if any mapping fails:
+    /// then another process holds one of them.
+    pub fn open() -> Rram {
+        let mut rram = bao1x_hal::rram::Reram::new();
+        let mgr = bao1x_hal::acram::SlotManager::new();
+        mgr.register_mapping(&mut rram);
+        Rram { mgr, rram }
     }
 
-    fn call(&self, op: keystore_api::AppKey) -> keystore_api::AppKey {
-        use keystore_api::AppKey;
-        let Ok(mut buf) = xous_ipc::Buffer::into_buf(op) else { return AppKey::InternalError };
-        if buf.lend_mut(self.0, keystore_api::Opcode::AppKeyOp as u32).is_err() {
-            return AppKey::InternalError;
-        }
-        buf.to_original::<AppKey, _>().unwrap_or(AppKey::InternalError)
+    fn slot(index: usize) -> Option<bao1x_api::SlotIndex> {
+        use bao1x_api::{APPLICATION, PartitionAccess, RwPerms, SlotIndex};
+        (index < APPLICATION.len())
+            .then(|| SlotIndex::Data(APPLICATION.get_base() + index, PartitionAccess::Open, RwPerms::ReadWrite))
     }
 }
 
 #[cfg(target_os = "xous")]
-impl Slots for Keystore {
-    fn read(&mut self, i: usize) -> Option<Slot> {
-        use keystore_api::{APPKEY_GUARD, AppKey};
-        match self.call(AppKey::ReadRequest { guard: APPKEY_GUARD, index: Self::BASE + i }) {
-            AppKey::ReadResponse { data } => Some(data),
-            e => {
-                log::error!("keystore read: {e:?}");
+impl Slots for Rram {
+    fn read(&mut self, index: usize) -> Option<Slot> {
+        match self.mgr.read(&Self::slot(index)?) {
+            Ok(d) => d.try_into().ok(),
+            Err(e) => {
+                log::error!("app slot {index}: read {e:?}");
                 None
             }
         }
     }
-    fn write(&mut self, i: usize, data: &Slot) -> bool {
-        use keystore_api::{APPKEY_GUARD, AppKey};
-        matches!(self.call(AppKey::Write { guard: APPKEY_GUARD, index: Self::BASE + i, data: *data }), AppKey::Success)
-    }
-}
-
-/// Emulator: `DABAO_SIGNER_KEY` or `target/dabao-signer-key.bin` in this crate. Not secret.
-#[cfg(not(target_os = "xous"))]
-struct HostFile(std::path::PathBuf);
-
-#[cfg(not(target_os = "xous"))]
-impl HostFile {
-    fn open() -> Self {
-        let path = std::env::var_os("DABAO_SIGNER_KEY")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/dabao-signer-key.bin"));
-        log::info!("emulated key storage: {path:?} (not secret)");
-        HostFile(path)
-    }
-}
-
-#[cfg(not(target_os = "xous"))]
-impl Slots for HostFile {
-    fn read(&mut self, i: usize) -> Option<Slot> {
-        match std::fs::read(&self.0) {
-            Ok(d) if d.len() == 64 => d[32 * i..32 * i + 32].try_into().ok(),
-            _ => Some([0; 32]),
+    fn write(&mut self, index: usize, data: &Slot) -> bool {
+        let Some(slot) = Self::slot(index) else { return false };
+        match self.mgr.write(&mut self.rram, &slot, data) {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!("app slot {index}: write {e:?}");
+                false
+            }
         }
     }
-    fn write(&mut self, i: usize, data: &Slot) -> bool {
-        let mut d = std::fs::read(&self.0).ok().filter(|d| d.len() == 64).unwrap_or_else(|| vec![0; 64]);
+}
+
+/// Emulator: the key in `DABAO_SIGNER_KEY` (default `target/dabao-signer-key.bin` in this
+/// crate); other slots in `$DABAO_SLOTS_DIR/dabao-slots-<range start>.bin` (default: this
+/// crate's `target/`), one file per range of `ipc::VERIFIER_SLOTS`. Not secret.
+#[cfg(not(target_os = "xous"))]
+pub struct HostFiles {
+    key: std::path::PathBuf,
+    dir: std::path::PathBuf,
+}
+
+#[cfg(not(target_os = "xous"))]
+impl HostFiles {
+    pub fn open() -> HostFiles {
+        let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let key = std::env::var_os("DABAO_SIGNER_KEY").map(std::path::PathBuf::from).unwrap_or_else(|| target.join("dabao-signer-key.bin"));
+        let dir = std::env::var_os("DABAO_SLOTS_DIR").map(std::path::PathBuf::from).unwrap_or(target);
+        log::info!("emulated slots: key {key:?}, others in {dir:?} (not secret)");
+        HostFiles { key, dir }
+    }
+
+    /// (file, slot count, position) for an absolute index.
+    fn locate(&self, index: usize) -> Option<(std::path::PathBuf, usize, usize)> {
+        use sim_types::ipc::{COUNTER_SLOTS, LC_SLOTS};
+        [(KEY_SLOTS, None), (COUNTER_SLOTS, Some(COUNTER_SLOTS.start)), (LC_SLOTS, Some(LC_SLOTS.start))]
+            .into_iter()
+            .find(|(r, _)| r.contains(&index))
+            .map(|(r, f)| {
+                let path = match f {
+                    None => self.key.clone(),
+                    Some(base) => self.dir.join(format!("dabao-slots-{base}.bin")),
+                };
+                (path, r.len(), index - r.start)
+            })
+    }
+}
+
+#[cfg(not(target_os = "xous"))]
+impl Slots for HostFiles {
+    fn read(&mut self, index: usize) -> Option<Slot> {
+        let (path, n, i) = self.locate(index)?;
+        let d = std::fs::read(&path).ok().filter(|d| d.len() == 32 * n).unwrap_or_else(|| vec![0; 32 * n]);
+        d[32 * i..32 * i + 32].try_into().ok()
+    }
+    fn write(&mut self, index: usize, data: &Slot) -> bool {
+        let Some((path, n, i)) = self.locate(index) else { return false };
+        let mut d = std::fs::read(&path).ok().filter(|d| d.len() == 32 * n).unwrap_or_else(|| vec![0; 32 * n]);
         d[32 * i..32 * i + 32].copy_from_slice(data);
-        if let Some(dir) = self.0.parent() {
+        if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).ok();
         }
-        std::fs::write(&self.0, d).is_ok()
+        std::fs::write(&path, d).is_ok()
     }
+}
+
+#[cfg(target_os = "xous")]
+pub fn open() -> Rram {
+    Rram::open()
+}
+#[cfg(not(target_os = "xous"))]
+pub fn open() -> HostFiles {
+    HostFiles::open()
 }
 
 fn header(key: &Slot) -> Slot {
@@ -131,11 +165,11 @@ enum Stored {
 /// key, or an invalid key is an error, so a transient fault can't make the signer overwrite
 /// (and lose) the stored key.
 fn load(slots: &mut impl Slots) -> Result<Stored, &'static str> {
-    let h = slots.read(1).ok_or("can't read the key header slot")?;
+    let h = slots.read(KEY_BASE + 1).ok_or("can't read the key header slot")?;
     if &h[..8] != MAGIC {
         return Ok(Stored::Empty);
     }
-    let k = Zeroizing::new(slots.read(0).ok_or("can't read the key slot")?);
+    let k = Zeroizing::new(slots.read(KEY_BASE).ok_or("can't read the key slot")?);
     if header(&k) != h {
         return Err("key slot doesn't match its header (corrupted?)");
     }
@@ -163,26 +197,24 @@ fn fresh_key() -> Zeroizing<Slot> {
     }
 }
 
-pub fn load_or_create_key() -> SigningKey {
-    #[cfg(target_os = "xous")]
-    let mut slots = Keystore::open();
-    #[cfg(not(target_os = "xous"))]
-    let mut slots = HostFile::open();
-    match load(&mut slots) {
+/// `no_create`: refuse to create a key (the build expects an existing one).
+pub fn load_or_create_key(slots: &mut impl Slots, no_create: bool) -> SigningKey {
+    match load(slots) {
         Ok(Stored::Key(k)) => {
             log::info!("signing key loaded");
             return k;
         }
+        Ok(Stored::Empty) if no_create => panic!("no signing key in slots {KEY_SLOTS:?}, and this build expects one; refusing to create a new one"),
         Ok(Stored::Empty) => {}
         // refuse to run rather than replace a key we failed to read
         Err(e) => panic!("signing key present but unusable: {e}; refusing to create a new one"),
     }
     let k = fresh_key();
     // key first, header last: a power cut in between leaves no header (-> Empty next boot)
-    if !(slots.write(0, &k) && slots.write(1, &header(&k))) {
+    if !(slots.write(KEY_BASE, &k) && slots.write(KEY_BASE + 1, &header(&k))) {
         panic!("can't store the signing key");
     }
-    let loaded = match load(&mut slots) {
+    let loaded = match load(slots) {
         Ok(Stored::Key(k)) => k,
         _ => panic!("the signing key doesn't read back"),
     };

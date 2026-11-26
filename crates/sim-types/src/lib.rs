@@ -697,8 +697,9 @@ pub mod wire {
 /// `OP_SIMULATE` (RLP `SimInput` -> RLP `SimResult`), `OP_SIGN` (RLP `SimInput` -> RLP
 /// `SignResult`), `OP_ADDRESS` (-> 20-byte address, or empty while no signer is attached).
 ///
-/// Signer -> verifier, on `SIGNER_CHANNEL_NAME` (one connection). The signer has no server of
-/// its own, so nothing can send it requests: it lends `OP_SIGNER_WAIT` (its 20-byte address)
+/// Signer -> verifier, on `SIGNER_CHANNEL_NAME` (one connection). The signer's only server is
+/// the slot server below, so nothing can send it signing requests: it lends `OP_SIGNER_WAIT`
+/// (its 20-byte address and the slot token)
 /// and blocks until the verifier returns it holding an RLP `SignJob`; then it lends
 /// `OP_SIGNER_RESULT` holding the EIP-2718 signed tx (empty if it refused).
 pub mod ipc {
@@ -719,4 +720,21 @@ pub mod ipc {
     pub const OP_LC_STATUS: usize = 9;
     pub const OP_SIGNER_WAIT: usize = 10;
     pub const OP_SIGNER_RESULT: usize = 11;
+
+    /// The signer's slot server, for the verifier's persistent state (the signer is PID 3 and
+    /// the only process that maps the RRAM slots and the RRAM controller; there's no keystore).
+    ///
+    /// Request (lent buffer): `SLOT_TOKEN_LEN` token, app-slot index (u32 big-endian), and for
+    /// `OP_SLOT_WRITE` the 32 bytes to write. Reply: the 32 bytes read / one byte 1 written;
+    /// empty (`valid` 0) if refused. The token is random per boot and reaches the verifier only
+    /// inside `OP_SIGNER_WAIT` (`signer address || token`); the first process to present it is
+    /// the only one served from then on. Only `VERIFIER_SLOTS` are served, never the key's.
+    pub const SLOTS_SERVER_NAME: &str = "_dabao signer slots_";
+    pub const OP_SLOT_READ: usize = 20;
+    pub const OP_SLOT_WRITE: usize = 21;
+    pub const SLOT_TOKEN_LEN: usize = 16;
+    /// Policy counters (`policy::MAX_LIMITS` slots), then the light client's two.
+    pub const COUNTER_SLOTS: core::ops::Range<usize> = 176..208;
+    pub const LC_SLOTS: core::ops::Range<usize> = 208..210;
+    pub const VERIFIER_SLOTS: core::ops::Range<usize> = COUNTER_SLOTS.start..LC_SLOTS.end;
 }

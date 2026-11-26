@@ -25,7 +25,7 @@ use clear_sign::{
 use sim_types::{PolicyCheck, SimInput, SimResult, effect};
 
 pub const POLICY_VERSION: u64 = 2;
-/// Counters available (keystore app slots claimed by the verifier).
+/// Counters available (app slots 176..208, kept by the signer for the verifier).
 pub const MAX_LIMITS: usize = 32;
 /// `max_slippage_bps` meaning "no limit".
 pub const NO_SLIPPAGE_LIMIT: u64 = 10_000;
@@ -72,7 +72,7 @@ pub fn builtin() -> Policy {
     alloy_rlp::Decodable::decode(&mut &include_bytes!("../policy.bin")[..]).expect("embedded policy")
 }
 
-/// One daily-spending counter, persisted as one 32-byte keystore slot:
+/// One daily-spending counter, persisted as one 32-byte RRAM app slot:
 /// `"DPL1" || id (8) || day (u32 BE) || spent (u128 BE)`. `id` ties it to its (chain, asset):
 /// a slot holding another limit's counter (policy changed) reads as a fresh counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

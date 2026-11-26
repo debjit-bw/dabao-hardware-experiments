@@ -12,8 +12,9 @@ A signer for the Baochip Dabao (Baochip-1x, Xous). Before every signature, the b
    (docs/clear-signing.md);
 4. **applies the owner's policy**: daily limits in RRAM, who may be called or paid, fee and slippage caps,
    compiled into the firmware (docs/policy.md);
-5. **signs a digest it built itself**, in a separate process. A keystore patch denies that
-   process's key slots to other processes (docs/keystore-slot-claims.md).
+5. **signs a digest it built itself**, in a separate process. That process runs as process 3,
+   in place of Xous's keystore, and is the only one that maps the key's storage
+   (docs/xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf).
 
 **The board has no display and no confirmation button yet.** The host prints what would be
 shown, and the host is untrusted, so today the policy in the firmware is the only approval.
@@ -36,7 +37,7 @@ and change everything, in plain English.
 ```
 crates/transport     process 1: USB HID framing (untrusted)
 crates/verifier      process 2: light client, witness verification, revm, 7730, policy, postcondition
-crates/signer        process 3: the key (keystore app slots), signs only verifier-approved jobs
+crates/signer        process 3 (PID 3, no keystore): the key and the RRAM slots, signs only verifier-approved jobs
 crates/xous-evm      witness-verified simulation + effects inspector + postcondition (no Xous deps)
 crates/light-client  sync-committee verification (BLS12-381, SSZ proofs)
 crates/clear-sign    ERC-7730 checker;   descriptors/  the descriptors compiled into the firmware
@@ -67,12 +68,15 @@ scripts/build-device.sh
 `vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{loader,xous,apps}.uf2`.
 
 `vendor/xous-core` is the `dabao-hackathon` branch of debjit-bw/xous-core: btchip/xous-core
-`devcon8-workshop` at `d1d4b9bca` plus three commits, which `git -C vendor/xous-core log -p -3`
-shows in full. [docs/xous-core-fork.md](docs/xous-core-fork.md) explains each one:
+`devcon8-workshop` at `d1d4b9bca` plus six commits, which
+`git -C vendor/xous-core log -p d1d4b9bca..HEAD` shows in full.
+[docs/xous-core-fork.md](docs/xous-core-fork.md) explains each one:
 
 - the Rust 1.100 `SVD_PATH` fix (betrusted-io/xous-core#1023, backported in btchip/xous-core#1);
-- per-boot keystore app-slot claims (docs/keystore-slot-claims.md);
-- BIO DMA windows only inside IFRAM, so no program can read other programs' memory through the BIO.
+- per-boot keystore app-slot claims (docs/keystore-slot-claims.md), no longer used by our image;
+- BIO DMA windows only inside IFRAM, so no program can read other programs' memory through the BIO;
+- two build-tool commits for our own boot1, built but never installed (docs/custom-boot1.md);
+- `--trusted-service`, which runs our signer as process 3 and leaves the keystore out.
 
 **Builds are reproducible:** the same commit gives byte-identical `loader.uf2`, `xous.uf2` and
 `apps.uf2`, wherever it's checked out and whatever the Cargo home. `build-device.sh` sets
@@ -134,8 +138,8 @@ Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/postcondition/run
 
 - [btchip/ethereum-app](https://github.com/btchip/ethereum-app) `dabao-app-eth-burner` (MIT OR
   Apache-2.0): the key storage in `crates/signer/src/store.rs`, the HID / TCP framing in
-  `crates/transport`, and the keystore calls in `crates/verifier/src/slots.rs` are adapted from it.
-- [xous-core](https://github.com/betrusted-io/xous-core): the OS, plus our keystore commit.
+  `crates/transport`, and the storage calls in `crates/verifier/src/slots.rs` are adapted from it.
+- [xous-core](https://github.com/betrusted-io/xous-core): the OS, plus our fork's commits.
 - [paradigmxyz/stateless](https://github.com/paradigmxyz/stateless) and
   [reth](https://github.com/paradigmxyz/reth): witness tries; the witness database and chain
   specs mirror theirs. [revm](https://github.com/bluealloy/revm): the EVM.

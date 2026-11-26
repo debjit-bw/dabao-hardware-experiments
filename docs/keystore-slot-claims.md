@@ -1,5 +1,10 @@
 # Keystore app-slot claims (keeping the signing key away from other processes)
 
+> **Superseded on 2026-11-26.** Our firmware no longer contains the keystore: the signer runs
+> as process 3 in its place and maps the slots itself
+> ([xous-core-fork.md, section 4](xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf)).
+> This page describes the earlier design and its tests, which ran on main up to `5181823`.
+
 ## Problem
 
 The device runs three MMU-isolated Xous processes:

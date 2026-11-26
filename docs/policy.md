@@ -29,10 +29,10 @@ Code: `crates/policy` (rules, host-testable), `crates/verifier/src/counters.rs` 
     finite limit.
   - plus, for ETH, the **maximum** network fee (`gas_limit × max fee per gas`), not the
     expected one.
-- **Counters persist in RRAM.** There is one 32-byte keystore app slot per daily limit
-  (slots 176–207), claimed by the verifier at boot before it registers its server, so the
-  claim comes before any host input. The slots use our keystore claim patch
-  (`docs/keystore-slot-claims.md`), so the keystore refuses other processes access to them. Slot format:
+- **Counters persist in RRAM.** There is one 32-byte app slot per daily limit (slots
+  176–207). The signer (process 3) holds the slots and serves these to the verifier only,
+  with a per-boot token ([xous-core-fork.md](xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf)).
+  The verifier loads them at boot before it registers its server, so before any host input. Slot format:
   `"DPL1" ‖ id (8) ‖ day (u32) ‖ spent (u128)`, where `id = keccak(chain ‖ asset)[..8]`. A slot
   that holds another limit's counter after a policy change reads as a fresh counter.
 - **Write before sign.** Counters are written before the job goes to the signer. A crash in

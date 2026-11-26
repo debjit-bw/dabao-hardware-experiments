@@ -14,10 +14,10 @@ the latest die (A1), and the `tapeout-a0` tag. **Our board's chip is stepping A0
 
 | The chip offers | Used? | How |
 |---|---|---|
-| MMU and Xous processes | **Yes, central** | Three isolated processes: USB parser, verifier, signer |
+| MMU and Xous processes | **Yes, central** | Three isolated processes: USB parser, verifier, signer. The signer is process 3, the one the RRAM hardware trusts |
 | RRAM (4 MiB, on chip) | **Yes** | A ~1 MB verifier runs straight from it. Spending counters, light-client state and the key persist in it |
 | TRNG | **Yes** | The signing key is generated on the chip from it |
-| Key store (hardware-checked slots) | **Studied, not used** | Our slots are "open". Developer mode erases protected slots on every boot. The way back is described below |
+| Key store (hardware-checked slots) | **Partly** | The signer holds the trusted process number and maps the slots itself; no keystore. But our slots are "open", so the hardware check doesn't run on them. Developer mode erases protected slots on every boot |
 | Crypto accelerators | **No** | No hardware for secp256k1, Keccak or BLS12-381. All our crypto is software |
 | BIO | **Security only** | Found that any program could use BIO DMA to read all memory. Proved it with a BIO program, then fixed it |
 | Open RTL | **Yes** | Read the RRAM controller and the BIO DMA filter. Checked both against the board |
@@ -43,8 +43,9 @@ we rely on, all measured on the board:
 - **Per-process memory limits.** Xous caps each process at 512 KiB of heap. The verifier raises
   its own cap to 1.5 MiB, so a runaway transport can't starve it. Peak use is 379–436 KB for
   real swaps and Safe transactions.
-- **Page ownership.** The kernel gives each physical page to one process at a time. That
-  is what stops other processes from mapping the key slots directly.
+- **Page ownership.** The kernel gives each physical page to one process at a time. The
+  signer maps the RRAM slots, their access-control region and the RRAM controller at boot, so
+  other processes can't map them. Measured: a test process gets `MemoryInUse` for all three.
 
 A microcontroller without an MMU (a Pico, say) would run all three in one address space,
 and a USB bug would expose the key.
@@ -53,7 +54,7 @@ and a USB bug would expose the key.
 
 - **Code run in place.** The verifier (~1 MB) is too big for the apps region, so it ships in
   the system image and executes straight from RRAM. The system image is 2.13 MB of 2.49 MB.
-- **State that survives a reset**, in the keystore's app slots: daily spending counters
+- **State that survives a reset**, in RRAM app slots held by the signer: daily spending counters
   (measured: a cold reset doesn't refill the budget), the light client's ratchet (so a laptop
   can't roll it back to an older chain after a reboot), and the signing key.
 
@@ -83,7 +84,7 @@ could speed up BLS12-381 is an open question we didn't explore.
 `docs/src/rram.md`). On every load from RRAM, the CPU tells the memory controller which "user"
 it is: one of four (boot0, boot1, fw0, fw1). Each storage slot has an owner. If the user
 doesn't match the owner, the read returns zeros. Boot1 maps Xous processes to users and then
-locks the mapping. Only process 3 (normally the keystore) gets the trusted user; every other
+locks the mapping. Only process 3 (upstream the keystore, in our image the signer) gets the trusted user; every other
 process, the kernel included, gets the untrusted one.
 
 **A0 versus A1.** On A1, an engineering change (`#eco16`) keeps the slot checks always on. On
@@ -104,9 +105,12 @@ hardware.
   every boot when developer mode is set (`bao1x-boot/boot0/src/main.rs`). Developer mode is
   permanent, and our board is in it: the first self-built image puts every Dabao there.
 
-So our key sits in an open slot, protected by software: the kernel's page ownership, our
-keystore change ([xous-core-fork.md](xous-core-fork.md)) and the BIO fix below. Physical
-access is enough to read it (hole F in the [guide](GUIDE.md)).
+So our key sits in an open slot, protected by software: the kernel's page ownership and the
+BIO fix below. Our signer runs as process 3 in place of the keystore and is the only program
+that maps the slots ([xous-core-fork.md](xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf)).
+That also makes it the only program that can reach A0's unlocked `RRCCR` switch. Physical
+access is still enough to read the key: flash other developer-signed firmware and read the
+slot (hole F in the [guide](GUIDE.md)).
 
 **The way back (designed, not done).** Boot1 can generate "collateral" secrets in slots
 261–263 that belong to the trusted user and survive developer mode. Boot1 makes them from the
@@ -194,7 +198,7 @@ sign challenges, proving that the boot chain hasn't been replaced. That is also 
 
 - That we verified the silicon, or used IRIS.
 - Hardware-accelerated crypto.
-- That the key is in hardware-protected slots.
+- That the key is in hardware-protected slots. The signer is the trusted process, but the key's slots are open.
 - That the chip is fully open. Baochip says some third-party IP is closed.
 - That this is impossible on any other board. We know of no other microcontroller with this
   mix.

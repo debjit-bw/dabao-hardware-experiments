@@ -5,7 +5,7 @@ The Dabao is one owner of a **2-of-3 Safe** (v1.4.1, SafeL2) on Sepolia:
 | Owner | Who | Where the key lives |
 |---|---|---|
 | agent `0x124b…A515` | an AI agent / automation, which proposes and executes | hot key on the host (`.dabao-keys/agent.key`) |
-| Dabao `0x7813…F986` | the device, which co-signs only what passes its checks | keystore app slots 160–161 (RRAM) |
+| Dabao `0x7813…F986` | the device, which co-signs only what passes its checks | app slots 160–161 (RRAM), held by the signer as process 3 |
 | recovery `0x6a65…6250` | the human, for override and recovery | offline in practice (a host file in the demo) |
 
 Safe: [`0x265871a72567419AE2f799a1288271C09B589fd9`](https://sepolia.etherscan.io/address/0x265871a72567419AE2f799a1288271C09B589fd9).

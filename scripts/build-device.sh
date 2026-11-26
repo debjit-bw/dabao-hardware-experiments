@@ -1,7 +1,11 @@
 #!/bin/bash
 # Build a dabao device image. Default: the verifier (process 2) as an XIP service in the
-# system image (xous.img); the transport (process 1, USB HID) and the signer (process 3,
-# keystore app slots) in the apps image.
+# system image (xous.img); the signer (process 3) also in the system image, as PID 3 in place
+# of the keystore (fork xtask --trusted-service); the transport (process 1, USB HID) in the
+# apps image.
+#
+# DABAO_SIGNER_ADDRESS=0x...: the signer then never creates a key, and refuses to run unless
+# the RRAM slots hold the key for this address.
 #
 #   scripts/build-device.sh [path/to/app-elf | xous-core-app-crate] [extra xtask args...]
 #   SERVICE=engine-spike GENERIC_HID=0 scripts/build-device.sh dabao-console   # the benchmark spike,
@@ -56,14 +60,16 @@ export CARGO_TARGET_RISCV32IMAC_UNKNOWN_NONE_ELF_RUSTFLAGS="--cfg curve25519_dal
 
 SERVICE="${SERVICE:-verifier}"
 svc_features=()
-[ "$SERVICE" = verifier ] && svc_features=(--features board-dabao)   # keystore slots for policy counters
+[ "$SERVICE" = verifier ] && svc_features=(--features board-dabao)
 # our crates have no rustflags of their own: only the remap, not xous-core's --cfg
 (cd "$here" && CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="$remap" cargo build --release -p "$SERVICE" --target riscv32imac-unknown-xous-elf ${svc_features[@]+"${svc_features[@]}"})
 (cd "$here" && CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="$remap" cargo build --release -p transport --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
 (cd "$here" && CARGO_TARGET_RISCV32IMAC_UNKNOWN_XOUS_ELF_RUSTFLAGS="$remap" cargo build --release -p signer --target riscv32imac-unknown-xous-elf --features board-dabao,bao1x)
-# the signer goes into the apps image next to the app (unless building something else)
-extra_apps=()
-[ "$SERVICE" = verifier ] && extra_apps=("$here/target/riscv32imac-unknown-xous-elf/release/signer")
+# the signer runs as PID 3 in the system image, and the keystore is left out (unless building
+# something else: then the stock keystore stays)
+trusted=()
+[ "$SERVICE" = verifier ] && trusted=(--trusted-service "signer~flash:$here/target/riscv32imac-unknown-xous-elf/release/signer")
+[ -n "${DABAO_SIGNER_ADDRESS:-}" ] && echo "signer: expects $DABAO_SIGNER_ADDRESS, never creates a key"
 engine="$here/target/riscv32imac-unknown-xous-elf/release/$SERVICE"
 # Paths are made absolute (xtask runs in $XOUS_CORE); bare names are xous-core app crates.
 # Only now: on a fresh clone the default app's directory doesn't exist until the builds above.
@@ -84,8 +90,8 @@ fi
 
 # Image signing embeds `git describe`, which needs upstream's version tags. A clone of the fork
 # has none, so give the pinned commit's version. (Another commit must bring its own tags.)
-PINNED_REV=9adce68498a2cfa64ac09ef8e9ff35254ea1be22
-PINNED_DESCRIBE=v0.10.2-182-g9adce6849
+PINNED_REV=ec255a6cffa493f872544b428fe420fd92073b55
+PINNED_DESCRIBE=v0.10.2-183-gec255a6cf
 version_args=()
 if ! git -C "$XOUS_CORE" describe --long --match 'v[0-9]*' >/dev/null 2>&1; then
     if [ "$(git -C "$XOUS_CORE" rev-parse HEAD)" = "$PINNED_REV" ]; then
@@ -108,7 +114,7 @@ if [ -n "${FIRMWARE_KEY:-}" ]; then
     echo "WARNING: signing with $FIRMWARE_KEY. These images boot only under our own boot1, not the stock one."
 fi
 
-(cd "$XOUS_CORE" && cargo xtask dabao "$app" ${extra_apps[@]+"${extra_apps[@]}"} ${usb_feature[@]+"${usb_feature[@]}"} \
+(cd "$XOUS_CORE" && cargo xtask dabao "$app" ${trusted[@]+"${trusted[@]}"} ${usb_feature[@]+"${usb_feature[@]}"} \
     ${version_args[@]+"${version_args[@]}"} --service "$SERVICE~flash:$engine" "$@")
 
 out="$XOUS_CORE/target/riscv32imac-unknown-xous-elf/release"

@@ -1,12 +1,16 @@
-//! Process 3 of 3: the signer. The only process that touches the private key.
+//! Process 3: the signer. The only process that touches the private key, and the only one
+//! that maps the RRAM slots (it runs as PID 3 in place of the keystore).
 //!
-//! * It has no server: nothing can send it requests. It connects to the verifier's private
-//!   signer channel and blocks in `OP_SIGNER_WAIT` until the verifier hands it a `SignJob`
-//!   (a transaction the verifier simulated and approved).
+//! * Its only server is the slot server for the verifier's persistent state
+//!   (`ipc::SLOTS_SERVER_NAME`): it answers only the process holding this boot's random token,
+//!   and only for `ipc::VERIFIER_SLOTS`, never the key's slots. Nothing can send it signing
+//!   requests: it connects to the verifier's private signer channel and blocks in
+//!   `OP_SIGNER_WAIT` until the verifier hands it a `SignJob` (a transaction the verifier
+//!   simulated and approved). The token travels in that first `OP_SIGNER_WAIT`.
 //! * It builds the transaction (EIP-155 legacy or EIP-1559, empty access list) and its signing
 //!   hash itself from those fields,
 //!   checks the job is for its own address, signs with k256 and returns the EIP-2718 bytes.
-//! * The key: 32 bytes from the chip TRNG on first boot, kept in two keystore app slots
+//! * The key: 32 bytes from the chip TRNG on first boot, kept in two RRAM app slots
 //!   (key, then a header written last); emulator: a host file.
 
 mod store;
@@ -107,39 +111,128 @@ fn call(cid: xous::CID, op: usize, payload: &[u8], cap: usize) -> Vec<u8> {
     out
 }
 
+/// The address this build must find in the slots, if built with `DABAO_SIGNER_ADDRESS` set.
+/// Then the signer never creates a key, and refuses to run with any other.
+const EXPECTED_ADDRESS: Option<&str> = option_env!("DABAO_SIGNER_ADDRESS");
+
+#[cfg(all(target_os = "xous", not(feature = "board-dabao")))]
+compile_error!("device builds of the signer need --features board-dabao");
+
+/// Device: what the keystore did at boot that the image still needs. Hardware access to the
+/// RRAM slots is ours only as PID 3, and the HAL leaves preemption off until someone (the
+/// keystore, upstream) turns it on.
+#[cfg(target_os = "xous")]
+fn device_init(xns: &xous_names::XousNames) {
+    let pid = xous::process::id();
+    if pid != bao1x_hal::coreuser::TRUSTED_PID as u32 {
+        panic!("the signer must run as PID {} (built with --trusted-service), not {pid}", bao1x_hal::coreuser::TRUSTED_PID);
+    }
+    let hal = xns.request_connection_blocking(bao1x_api::SERVER_NAME_BAO1X_HAL).expect("HAL");
+    xous::send_message(hal, xous::Message::new_blocking_scalar(bao1x_api::HalOpcode::SetPreemptionState as usize, 1, 0, 0, 0))
+        .expect("can't turn preemption on");
+}
+
+fn token_ok(got: &[u8], want: &[u8; ipc::SLOT_TOKEN_LEN]) -> bool {
+    got.len() == want.len() && got.iter().zip(want).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+}
+
+/// The verifier's persistent state. Serves `ipc::VERIFIER_SLOTS` only, only with the token,
+/// and only to the first process that presented it.
+fn serve_slots(sid: xous::SID, token: [u8; ipc::SLOT_TOKEN_LEN], slots: &mut impl store::Slots) -> ! {
+    let mut client: Option<xous::PID> = None;
+    loop {
+        let mut msg = xous::receive_message(sid).unwrap();
+        let op = msg.body.id();
+        let sender = msg.sender.pid();
+        let Some(mem) = msg.body.memory_message_mut() else { continue };
+        let len = mem.valid.map(|v| v.get()).unwrap_or(0).min(mem.buf.len());
+        let req = unsafe { &mem.buf.as_slice::<u8>()[..len] };
+        let t = ipc::SLOT_TOKEN_LEN;
+        let index = (len >= t + 4).then(|| u32::from_be_bytes(req[t..t + 4].try_into().unwrap()) as usize);
+        let refuse = |why: &str| log::warn!("slot server: refused op {op} slot {index:?} from PID {:?}: {why}", sender.map(|p| p.get()));
+        let mut answer: Option<Vec<u8>> = None;
+        if len < t + 4 || !token_ok(&req[..t], &token) {
+            refuse("bad token");
+        } else if client.is_some() && client != sender {
+            refuse("not the verifier");
+        } else if !ipc::VERIFIER_SLOTS.contains(&index.unwrap()) {
+            refuse("slot not served");
+        } else {
+            if client.is_none() {
+                client = sender;
+                log::info!("slot server: verifier is PID {:?}", sender.map(|p| p.get()));
+            }
+            let i = index.unwrap();
+            answer = match (op, len - t - 4) {
+                (ipc::OP_SLOT_READ, 0) => slots.read(i).map(|d| d.to_vec()),
+                (ipc::OP_SLOT_WRITE, 32) => {
+                    let d: store::Slot = req[t + 4..].try_into().unwrap();
+                    slots.write(i, &d).then(|| vec![1])
+                }
+                _ => {
+                    refuse("bad request");
+                    None
+                }
+            };
+        }
+        let out = answer.unwrap_or_default();
+        unsafe { mem.buf.as_slice_mut::<u8>()[..out.len()].copy_from_slice(&out) };
+        mem.valid = xous::MemorySize::new(out.len());
+    }
+}
+
 fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
+    let xns = xous_names::XousNames::new().unwrap();
+    #[cfg(target_os = "xous")]
+    device_init(&xns);
 
-    let key = store::load_or_create_key();
+    let mut slots = store::open();
+    let key = store::load_or_create_key(&mut slots, EXPECTED_ADDRESS.is_some());
     let me = address_of(&key);
+    if let Some(want) = EXPECTED_ADDRESS {
+        if !want.eq_ignore_ascii_case(&me.to_string()) {
+            panic!("the slots hold {me}, but this build expects {want}; refusing to run");
+        }
+    }
     log::info!("signer {}, PID {}, address {me}", env!("CARGO_PKG_VERSION"), xous::process::id());
 
-    let xns = xous_names::XousNames::new().unwrap();
-    let cid = xns.request_connection_blocking(ipc::SIGNER_CHANNEL_NAME).expect("verifier signer channel");
-    loop {
-        // blocks until the verifier has an approved transaction for us
-        let job_bytes = call(cid, ipc::OP_SIGNER_WAIT, me.as_slice(), 64 * 1024);
-        let reply = match alloy_rlp::Decodable::decode(&mut &job_bytes[..]) {
-            Ok(job) => match sign(&key, me, &job) {
-                Ok(raw) => {
-                    if job.kind == SignJob::SAFE_MULTISEND {
-                        log::info!("co-signed Safe {} nonce {} to {}", job.tx.from, job.safe_nonce, job.tx.to);
-                    } else {
-                        log::info!("signed nonce {} to {} ({} B)", job.tx.nonce, job.tx.to, raw.len());
+    let mut token = [0u8; ipc::SLOT_TOKEN_LEN];
+    getrandom::getrandom(&mut token).expect("TRNG");
+    // unlimited connections: a process that connects first gains nothing without the token
+    let slots_sid = xns.register_name(ipc::SLOTS_SERVER_NAME, None).expect("can't register slot server");
+
+    std::thread::spawn(move || {
+        let xns = xous_names::XousNames::new().unwrap();
+        let cid = xns.request_connection_blocking(ipc::SIGNER_CHANNEL_NAME).expect("verifier signer channel");
+        let mut hello = me.to_vec();
+        hello.extend_from_slice(&token);
+        loop {
+            // blocks until the verifier has an approved transaction for us
+            let job_bytes = call(cid, ipc::OP_SIGNER_WAIT, &hello, 64 * 1024);
+            let reply = match alloy_rlp::Decodable::decode(&mut &job_bytes[..]) {
+                Ok(job) => match sign(&key, me, &job) {
+                    Ok(raw) => {
+                        if job.kind == SignJob::SAFE_MULTISEND {
+                            log::info!("co-signed Safe {} nonce {} to {}", job.tx.from, job.safe_nonce, job.tx.to);
+                        } else {
+                            log::info!("signed nonce {} to {} ({} B)", job.tx.nonce, job.tx.to, raw.len());
+                        }
+                        raw
                     }
-                    raw
-                }
+                    Err(e) => {
+                        log::warn!("refused: {e}");
+                        Vec::new()
+                    }
+                },
                 Err(e) => {
-                    log::warn!("refused: {e}");
+                    log::warn!("bad job from verifier: {e}");
                     Vec::new()
                 }
-            },
-            Err(e) => {
-                log::warn!("bad job from verifier: {e}");
-                Vec::new()
-            }
-        };
-        call(cid, ipc::OP_SIGNER_RESULT, &reply, 4096);
-    }
+            };
+            call(cid, ipc::OP_SIGNER_RESULT, &reply, 4096);
+        }
+    });
+    serve_slots(slots_sid, token, &mut slots)
 }

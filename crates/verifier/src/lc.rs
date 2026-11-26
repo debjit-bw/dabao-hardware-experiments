@@ -1,6 +1,6 @@
 //! The light client's state in the verifier.
 //!
-//! RRAM (claimed app slots 208..210): slot 0 = the trusted committee root, slot 1 =
+//! RRAM (app slots 208..210, kept by the signer): slot 0 = the trusted committee root, slot 1 =
 //! `"DLC1" || period (u64 BE) || highest verified slot (u64 BE)`. Empty (first boot), or older
 //! than the firmware's anchor (`light_client::anchor`): start from the anchor.
 //! RAM: the trusted committee's keys, decompressed, once the host uploads them (per boot).
@@ -30,8 +30,8 @@ fn now() -> u64 {
 }
 
 impl LightClient {
-    pub fn open() -> LightClient {
-        let mut slots = crate::slots::Slots::open(208, 2, "light client");
+    pub fn open(token: Option<crate::slots::Token>) -> LightClient {
+        let mut slots = crate::slots::Slots::open(sim_types::ipc::LC_SLOTS, "light client", token);
         let (mut period, mut root, mut highest) = (anchor::PERIOD, anchor::COMMITTEE_ROOT, anchor::CHECKPOINT_SLOT);
         if let (Some(r), Some(m)) = (slots.read(0), slots.read(1)) {
             let p = u64::from_be_bytes(m[4..12].try_into().unwrap());

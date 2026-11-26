@@ -206,6 +206,8 @@ fn approve(input: &SimInput, sim: &SimResult, signer: Address, safe: Option<&sim
 /// comes back on the same server and is passed back.
 struct SignerLink {
     address: Arc<Mutex<Option<Address>>>,
+    /// The signer's slot-server token (`ipc::SLOTS_SERVER_NAME`), from its first `OP_SIGNER_WAIT`.
+    token: Arc<Mutex<Option<slots::Token>>>,
     jobs: Sender<SignJob>,
     results: Mutex<Receiver<Vec<u8>>>,
 }
@@ -213,12 +215,14 @@ struct SignerLink {
 fn start_signer_channel(xns: &xous_names::XousNames) -> SignerLink {
     let sid = xns.register_name(ipc::SIGNER_CHANNEL_NAME, Some(1)).expect("can't register signer channel");
     let address = Arc::new(Mutex::new(None));
+    let token = Arc::new(Mutex::new(None));
     let (jobs, job_rx) = channel::<SignJob>();
     let (result_tx, results) = channel::<Vec<u8>>();
     let addr = address.clone();
+    let tok = token.clone();
     std::thread::spawn(move || {
         loop {
-            // 1. the signer parks OP_SIGNER_WAIT (with its address)
+            // 1. the signer parks OP_SIGNER_WAIT (with its address and slot token)
             let mut wait = xous::receive_message(sid).unwrap();
             if wait.body.id() != ipc::OP_SIGNER_WAIT {
                 log::warn!("signer channel: expected OP_SIGNER_WAIT, got {}", wait.body.id());
@@ -226,21 +230,24 @@ fn start_signer_channel(xns: &xous_names::XousNames) -> SignerLink {
             }
             let Some(mem) = wait.body.memory_message_mut() else { continue };
             let len = mem.valid.map(|v| v.get()).unwrap_or(0).min(mem.buf.len());
-            let a = unsafe { &mem.buf.as_slice::<u8>()[..len] };
-            if a.len() != 20 {
-                log::warn!("signer channel: bad address length {}", a.len());
+            let p = unsafe { &mem.buf.as_slice::<u8>()[..len] };
+            if p.len() != 20 + ipc::SLOT_TOKEN_LEN {
+                log::warn!("signer channel: bad OP_SIGNER_WAIT length {}", p.len());
                 continue;
             }
-            let a = Address::from_slice(a);
+            let a = Address::from_slice(&p[..20]);
+            let t: slots::Token = p[20..].try_into().unwrap();
             {
                 let mut cur = addr.lock().unwrap();
-                match *cur {
-                    None => {
+                let mut cur_t = tok.lock().unwrap();
+                match (*cur, *cur_t) {
+                    (None, _) => {
                         log::info!("signer attached: {a}");
                         *cur = Some(a);
+                        *cur_t = Some(t);
                     }
-                    Some(prev) if prev != a => {
-                        log::error!("signer channel: address changed {prev} -> {a}; refusing");
+                    (Some(prev), Some(prev_t)) if prev != a || prev_t != t => {
+                        log::error!("signer channel: address or token changed ({prev} -> {a}); refusing");
                         continue;
                     }
                     _ => {}
@@ -274,12 +281,24 @@ fn start_signer_channel(xns: &xous_names::XousNames) -> SignerLink {
             result_tx.send(signed).ok();
         }
     });
-    SignerLink { address, jobs, results: Mutex::new(results) }
+    SignerLink { address, token, jobs, results: Mutex::new(results) }
 }
 
 impl SignerLink {
     fn address(&self) -> Option<Address> {
         *self.address.lock().unwrap()
+    }
+
+    /// The slot token, waiting up to `secs` for the signer to attach.
+    fn wait_token(&self, secs: u64) -> Option<slots::Token> {
+        for _ in 0..secs * 20 {
+            if let Some(t) = *self.token.lock().unwrap() {
+                return Some(t);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        log::error!("no signer attached after {secs} s: persistent state unavailable, signing disabled");
+        None
     }
 
     fn sign(&self, job: SignJob) -> Vec<u8> {
@@ -415,11 +434,13 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     raise_heap_limit();
-    // claim and load the policy counters before registering the server (before any host input)
-    let mut counters = Counters::open(&POLICY);
-    let mut lc = lc::LightClient::open();
+    // the signer (PID 3) keeps our persistent state: wait for it to attach, then load the
+    // policy counters and the light client before registering the server (before any host input)
     let xns = xous_names::XousNames::new().unwrap();
     let signer = start_signer_channel(&xns);
+    let token = signer.wait_token(30);
+    let mut counters = Counters::open(&POLICY, token);
+    let mut lc = lc::LightClient::open(token);
     let sid = xns.register_name(ipc::VERIFIER_SERVER_NAME, Some(1)).expect("can't register verifier");
     log::info!("verifier {} ready, PID {}", env!("CARGO_PKG_VERSION"), xous::process::id());
 

@@ -38,7 +38,7 @@ persistence), `host/dabao-host/src/lc.rs` (fetching only: every byte it sends is
    Without a valid proof nothing is signed (simulation still runs, marked
    `HEADER NOT VERIFIED`).
 
-RRAM: app slots 208–209 (claimed), holding the committee root and
+RRAM: app slots 208–209 (kept by the signer for the verifier), holding the committee root and
 `"DLC1" ‖ period ‖ highest slot`.
 
 The host takes the parent block from the latest *optimistic update* (the newest head the

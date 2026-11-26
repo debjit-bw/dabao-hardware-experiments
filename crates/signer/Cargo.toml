@@ -3,7 +3,7 @@ name = "signer"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Process 3 of 3: holds the key; signs only transactions the verifier approved, building the hash itself"
+description = "Process 3 (PID 3, in place of the keystore): holds the key and the RRAM slots; signs only transactions the verifier approved, building the hash itself"
 
 [[bin]]
 name = "signer"
@@ -24,11 +24,11 @@ sha2 = "0.10"
 zeroize = "1.7"
 getrandom = "0.2"
 
-# device builds only: keystore app slots (only the IPC types: the keystore crate is a server)
-keystore-api = { path = "../../vendor/xous-core/libs/keystore-api", optional = true, features = ["gen2", "app-keys"] }
-xous-ipc = { version = "0.10.11", optional = true }
+# device builds only: direct RRAM slot access as PID 3 (in place of the keystore)
+bao1x-hal = { path = "../../vendor/xous-core/libs/bao1x-hal", optional = true, features = ["std", "board-dabao"] }
+bao1x-api = { path = "../../vendor/xous-core/libs/bao1x-api", optional = true, features = ["std"] }
 utralib = { version = "0.1.27", optional = true, default-features = false }
 
 [features]
-board-dabao = ["keystore-api", "xous-ipc"]
-bao1x = ["utralib/bao1x"]
+board-dabao = ["bao1x-hal", "bao1x-api"]
+bao1x = ["utralib/bao1x", "utralib/std"]

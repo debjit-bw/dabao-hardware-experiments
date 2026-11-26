@@ -108,8 +108,8 @@ Status: items 1–4 are done in the fork (built, not pushed); item 5 isn't start
    collateral, which changes the device's address.
 5. **The signer:** derive the signing key from the collateral (HKDF-SHA256 over slots 261–263,
    salted with the chip's UUID). Only process 3 can read the collateral, so this goes with
-   making the signer process 3 (option B in the chat history; it also removes the keystore
-   patch).
+   making the signer process 3. That part is done and running
+   ([xous-core-fork.md](xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf)).
 
 ## Permanent settings it touches
 
@@ -145,18 +145,17 @@ All are one-way counters: they can only go up. Each one tops out at 10,000.
 
 ## Steps, with a stop after each
 
-1. **No board changes.** *Done (2026-11-26):* items 1–4 above, built and checked. The recovery
-   image (`cargo xtask bao1x-boot-updater --boot1 <our boot1.img>`) builds without its `boot0`
-   feature: no boot0-writing code in it, and our boot1 embedded whole. Make the build changes
-   above. Build boot1, the recovery image and re-signed firmware. Read the post-quantum and staging code. Check the built images' headers
-   (embedded keys, counter-signature) with a script. *Status: the firmware key exists
-   (`.dabao-firmware-key/`, gitignored). Both build changes made. Boot1 built and checked: our
-   key is in slot 0, the developer key is absent. Post-quantum isn't required (only if the
-   `REQUIRE_PQ` counter is set, and it isn't). Still to do: the recovery image without `boot0`,
-   firmware signed with our key, and the A0 boot0 question above.*
-2. **Option B** on the current boot chain: the signer becomes process 3, the keystore and its
-   patch go. Normal flashing.
+1. **No board changes.** *Done (2026-11-26):* items 1–4 above, built and checked. Boot1 is
+   reproducible, with our key in all four ed25519 slots and the developer key absent.
+   Post-quantum signatures aren't required (only if the `REQUIRE_PQ` counter is set, and it
+   isn't). The recovery image (`cargo xtask bao1x-boot-updater --boot1 <our boot1.img>`)
+   builds without its `boot0` feature: no boot0-writing code in it, and our boot1 embedded
+   whole. Firmware signed with our key verifies with our key and fails with the developer key.
+2. **The signer as process 3** on the current boot chain. *Done and running on the board
+   (2026-11-26):* the keystore and its patch are out of our image
+   ([xous-core-fork.md](xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf)).
 3. **The boot1 swap,** with the recovery image in place. The key stays as it is. Check that the
-   collateral survives reboots, and that developer-signed firmware is refused.
+   collateral survives reboots, and that developer-signed firmware is refused. *Not done: on
+   our board's v0.10.0 boot0 the collateral can't survive (above).*
 4. **Decide on the key:** derive it from the collateral, which gives a new address. Move the
    Safe's owner over with `swapOwner` and the board account's ETH beforehand.
