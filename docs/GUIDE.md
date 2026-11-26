@@ -214,7 +214,9 @@ If you change `crates/sim-types`, flash both `xous.uf2` and `apps.uf2`, and rebu
    controller.
 2. It loads its key from slots 160 and 161. On the very first boot it makes one from the
    hardware random number generator.
-3. The verifier raises its memory cap from 512 KiB to 1.5 MiB.
+3. The verifier raises its memory cap from 512 KiB to 1.5 MiB, then maps the chip's hash
+   engine and self-tests it. Keccak-256 and SHA-256 then run on the engine, or in software if
+   the test fails.
 4. The signer connects to the verifier and reports its address and this boot's password.
 5. The verifier loads the spending counters and light-client state through the signer.
 6. Only now does the transport start reading USB.
@@ -379,11 +381,11 @@ counts as spending its full amount.
 
 | Thing | Number |
 |---|---|
-| Simulate a Sepolia swap (117 KB witness) | 201 ms, 436 KB peak memory |
+| Simulate a Sepolia swap (117 KB witness) | 124–129 ms on the hash engine (201 ms in software), 436 KB peak memory |
 | Sign a wrap, all checks (17 KB witness) | 0.84 s, 116 KB peak memory |
 | Verify one committee signature | about 0.7 s |
 | Sign a simple send, all checks | about 0.84 s on the chip |
-| Safe co-sign, all checks (about 98 KB) | about 1 s on the chip, 4.4 s with USB, 379 to 390 KB peak memory |
+| Safe co-sign, all checks (about 98 KB) | about 0.92 s on the chip, 4.4 s with USB, 379 to 390 KB peak memory |
 | Load committee keys after boot | about 7 s |
 | USB speed | about 28 KB/s |
 | System image | 2,130,448 of 2,490,368 bytes |
@@ -533,10 +535,12 @@ Inside `main.rs`:
 
 | File | What it does |
 |---|---|
-| `crates/verifier/Cargo.toml` | Package file. `board-dabao` has no effect any more (storage is the signer's job). |
+| `crates/verifier/Cargo.toml` | Package file. On the device it turns on alloy's `native-keccak`, so every Keccak goes to `crates/sce-hash`. `board-dabao` has no effect any more (storage is the signer's job). |
 | `crates/verifier/src/main.rs` | The brain. See below. |
 | `crates/verifier/src/slots.rs` | Permanent storage, asked of the signer's slot server with this boot's password. |
 | `crates/verifier/src/counters.rs` | Loads and saves the daily spending counters. An unreadable counter means no signing. |
+| `crates/sce-hash/Cargo.toml` | Package file for the hash-engine library. |
+| `crates/sce-hash/src/lib.rs` | Keccak-256 and SHA-256 on the chip's hash engine: maps it, self-tests it against software, falls back to software. Provides `native_keccak256` for alloy and `Sha256Hw` for the light client. See `docs/hash-engine.md`. |
 | `crates/verifier/src/lc.rs` | Light-client state: saved root, period and newest slot, plus keys in RAM. Has `load`, `update`, `check` and `ratchet`. |
 
 Inside `main.rs`:
@@ -548,7 +552,7 @@ Inside `main.rs`:
 - `start_signer_channel` and `SignerLink`: the private line to the signer.
 - `sign_request`: approve, save, then ask the signer.
 - `MAX_INPUT` and `raise_heap_limit`: the memory limits.
-- `main`: waits for the signer's password, loads storage, opens both servers, answers requests forever.
+- `main`: switches on the hash engine (`sce_hash::init`), waits for the signer's password, loads storage, opens both servers, answers requests forever.
 
 ### 7.5 `crates/signer`: process 3
 
@@ -587,7 +591,7 @@ No Xous code here, so it also runs on a laptop.
 
 | File | What it does |
 |---|---|
-| `crates/light-client/Cargo.toml` | Uses arkworks for the BLS curve math. No C code. |
+| `crates/light-client/Cargo.toml` | Uses arkworks for the BLS curve math. No C code. SHA-256 comes from `crates/sce-hash` (the chip's hash engine on the device). |
 | `crates/light-client/src/lib.rs` | Sepolia fork versions, hashing in Ethereum's SSZ format, Merkle branch checks, committee loading, signature checks (`verify_signed`), block proofs (`verify_header_proof`) and hand-overs (`verify_update`). |
 | `crates/light-client/src/anchor.rs` | Generated. The first trusted committee: period 1419. |
 | `crates/light-client/tests/protocol.rs` | Anchor, hand-over and block proof tests on real data, with forged versions that must fail. |
@@ -635,6 +639,8 @@ No Xous code here, so it also runs on a laptop.
 | `crates/bio-dma-probe/src/main.rs` | Pretends to be a hacked process that reads memory through the BIO's DMA, around the MMU. Writes its test value through the keystore, so needs the old image (main at `5181823`). Never ship it. |
 | `crates/lc-bench/Cargo.toml` | Package file. |
 | `crates/lc-bench/src/main.rs` | Times BLS verification on the chip. |
+| `crates/hash-bench/Cargo.toml` | Package file. |
+| `crates/hash-bench/src/main.rs` | Finds how the hash engine lays out the Keccak state, checks Keccak-256 and SHA-256 against software, and times both. |
 
 ### 7.11 `host/dabao-host`: the computer side
 
@@ -717,6 +723,7 @@ No Xous code here, so it also runs on a laptop.
 | `docs/keystore-slot-claims.md` | The old keystore change and how it was attacked in tests. Superseded by the signer as process 3. |
 | `docs/xous-core-fork.md` | Each change in our xous-core fork, and why. |
 | `docs/hardware.md` | What the chip offers, what we use, and how. |
+| `docs/hash-engine.md` | Keccak-256 and SHA-256 on the chip's hash engine: how, the self-test, board timings. |
 | `docs/custom-boot1.md` | The plan for our own boot1 and a hardware-protected key. Not done yet. |
 | `docs/safe-cosigner.md` | The Safe setup and checks. |
 | `docs/postcondition.md` | The final on-chain check. |
@@ -1004,10 +1011,10 @@ Every other command, and the environment variables: [part 15](#15-command-refere
 
 ## 11. How to test
 
-### On the computer (56 tests)
+### On the computer (61 tests)
 
 ```sh
-cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp
+cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp -p sce-hash -p hash-bench
 ```
 
 Name the packages like this. Some crates in the workspace are board programs.
@@ -1039,6 +1046,15 @@ SERVICE=lc-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
 ```
 
 Flash as usual and read the console.
+
+### Hash-engine benchmark, on the board
+
+```sh
+SERVICE=hash-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
+scripts/flash-and-log.py --until "HASH DONE" vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{loader,xous,apps}.uf2
+```
+
+Expect 0 mismatches and `HASH DONE`. Flash the normal image again afterwards.
 
 ### After any change that affects signing
 
@@ -1234,7 +1250,7 @@ ROUTER=0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E
 
 | Command | Mark | Needs | Does |
 |---|---|---|---|
-| `status` | read | board | memory limits, signer address |
+| `status` | read | board | memory limits, signer address, hash backend and its self-test |
 | `address` | read | board | the board's account |
 | `policy` | read | board | rules and spending counters |
 | `lc-sync` | board | board, beacon node | load the committee, follow hand-overs |
@@ -1448,12 +1464,13 @@ scripts/uniswap-calldata.py $DEAD 10000000000 --multicall --slippage-bps 50
 scripts/flash-and-log.py --help
 ```
 
-Builds (normal, with a USB console, the BLS benchmark, the first engine experiment):
+Builds (normal, with a USB console, the BLS benchmark, the hash-engine benchmark, the first engine experiment):
 
 ```sh
 scripts/build-device.sh
 GENERIC_HID=0 scripts/build-device.sh
 SERVICE=lc-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
+SERVICE=hash-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
 SERVICE=engine-spike GENERIC_HID=0 scripts/build-device.sh dabao-console
 ```
 
@@ -1496,7 +1513,7 @@ claude mcp remove dabao-wallet
 git submodule update --init vendor/xous-core
 (cd vendor/xous-core && cargo xtask install-toolkit)
 cargo build --locked -p dabao-host -p bao-mcp
-cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp
+cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp -p sce-hash -p hash-bench
 cargo test --locked -p policy a_router_is_not_a_recipient
 (cd contracts && forge build)
 (cd contracts && forge test --fork-url https://ethereum-sepolia-rpc.publicnode.com)

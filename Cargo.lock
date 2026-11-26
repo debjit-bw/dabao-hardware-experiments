@@ -2486,6 +2486,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash-bench"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "log",
+ "sha2 0.10.9",
+ "utralib",
+ "xous",
+ "xous-api-log",
+]
+
+[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3203,6 +3215,7 @@ dependencies = [
  "ark-ec",
  "ark-ff 0.6.0",
  "ark-serialize 0.6.0",
+ "sce-hash",
  "sha2 0.10.9",
  "sim-types",
 ]
@@ -5039,6 +5052,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sce-hash"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "digest 0.10.7",
+ "log",
+ "sha2 0.10.9",
+ "utralib",
+ "xous",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6126,6 +6151,7 @@ dependencies = [
  "light-client",
  "log",
  "policy",
+ "sce-hash",
  "sim-types",
  "xous",
  "xous-api-log",

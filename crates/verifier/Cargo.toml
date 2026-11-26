@@ -22,7 +22,14 @@ light-client = { path = "../light-client" }
 alloy-consensus = { version = "2.4.2", default-features = false }
 alloy-rlp = { version = "0.3.16", default-features = false }
 alloy-primitives = { version = "1.6.1", default-features = false }
+sce-hash = { path = "../sce-hash" }
 
 [features]
 # device build (no effect since the signer keeps the slots; kept so build scripts don't change)
 board-dabao = []
+
+# device: every alloy keccak256 (trie proofs, revm's KECCAK256/CREATE2, our code) goes through
+# sce-hash's `native_keccak256`, i.e. the chip's hash engine once its boot self-test passed.
+# Target-specific, so host and emulator builds keep software Keccak.
+[target.'cfg(target_os = "xous")'.dependencies]
+alloy-primitives = { version = "1.6.1", default-features = false, features = ["native-keccak"] }

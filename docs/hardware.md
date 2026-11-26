@@ -2,8 +2,9 @@
 
 This page goes through what the Baochip-1x offers, using the hackathon's own list, and says
 for each item what we use, how, and what we don't. "Measured" means shown on our board.
-"From the RTL" means read in the chip's published design and not tested. Our crypto runs in
-software, and we didn't use IRIS. Both are said plainly below.
+"From the RTL" means read in the chip's published design and not tested. Keccak-256 and SHA-256 run
+on the chip's hash engine. Signatures and the light client's BLS arithmetic run in software,
+and we didn't use IRIS. Both are said plainly below.
 
 The chip's design (RTL) we read is
 [baochip/baochip-1x](https://github.com/baochip/baochip-1x): `main` at `750f0e8`, which tracks
@@ -18,7 +19,7 @@ the latest die (A1), and the `tapeout-a0` tag. **Our board's chip is stepping A0
 | RRAM (4 MiB, on chip) | **Yes** | A ~1 MB verifier runs straight from it. Spending counters, light-client state and the key persist in it |
 | TRNG | **Yes** | The signing key is generated on the chip from it |
 | Key store (hardware-checked slots) | **Partly** | The signer holds the trusted process number and maps the slots itself; no keystore. But our slots are "open", so the hardware check doesn't run on them. Developer mode erases protected slots on every boot |
-| Crypto accelerators | **No** | No hardware for secp256k1, Keccak or BLS12-381. All our crypto is software |
+| Crypto accelerators | **Yes, hashing** | The hash engine's SHA3 mode is a raw Keccak permutation, so Ethereum's Keccak-256 runs on it, and so does the light client's SHA-256. Self-tested at every boot. Swap simulation 37% faster. No hardware for secp256k1 or BLS12-381 |
 | BIO | **Security only** | Found that any program could use BIO DMA to read all memory. Proved it with a BIO program, then fixed it |
 | Open RTL | **Yes** | Read the RRAM controller and the BIO DMA filter. Checked both against the board |
 | IRIS die inspection | **No** | |
@@ -72,11 +73,25 @@ board.
 
 ## Crypto accelerators
 
-Not used. The chip has hardware AES, SHA-256 and a public-key engine (PKE), but Ethereum needs
-secp256k1 signatures, Keccak hashes and, for the light client, BLS12-381 pairings. None of those
-has documented hardware support, so all of them run in software on the main CPU: a sync-committee
-check takes about 0.7 s, and checking and signing a simple send about 0.84 s. Whether the PKE
-could speed up BLS12-381 is an open question we didn't explore.
+**Used for hashing** (measured; details in [hash-engine.md](hash-engine.md)). The chip's
+"combohash" engine lists SHA3 among its modes. The RTL shows that mode is a raw Keccak-f[1600]
+permutation with no padding in hardware, so Ethereum's Keccak-256 (SHA3's permutation with
+different padding) runs on it: the sponge in software, every permutation on the engine.
+
+- **Keccak-256.** The verifier routes every Keccak through it, through alloy-primitives'
+  `native-keccak` hook: the Merkle-proof checks, revm's `KECCAK256` and CREATE2, and our own
+  code.
+- **SHA-256.** The light client's SSZ roots and hash-to-curve use the engine's SHA-256.
+- **Self-test.** At every boot the verifier checks both against software (a published test
+  vector, plus 25 input lengths each) and uses only what passes. A timeout switches it back
+  to software.
+- **Speed.** Keccak is 1.7–1.8× faster per hash and SHA-256 1.6–4×. Simulating a 117 KB swap
+  went from 201 to 124–129 ms with identical results. Signing barely changes, because about
+  0.7 s of it is the light client's BLS pairing check.
+
+**Not used:** AES (nothing to encrypt) and the public-key engine (PKE). There's no hardware for
+secp256k1, so signing is software. Whether the PKE could speed up BLS12-381 is an open question
+we didn't explore.
 
 ## The key store: what the hardware protects, and why our key doesn't use it
 
@@ -197,7 +212,7 @@ sign challenges, proving that the boot chain hasn't been replaced. That is also 
 ## Not claimed
 
 - That we verified the silicon, or used IRIS.
-- Hardware-accelerated crypto.
+- Hardware-accelerated signatures or BLS. Only hashing (Keccak-256, SHA-256) uses the engine.
 - That the key is in hardware-protected slots. The signer is the trusted process, but the key's slots are open.
 - That the chip is fully open. Baochip says some third-party IP is closed.
 - That this is impossible on any other board. We know of no other microcontroller with this

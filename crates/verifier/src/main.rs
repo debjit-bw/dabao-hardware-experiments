@@ -434,6 +434,16 @@ fn main() -> ! {
     log_server::init_wait().unwrap();
     log::set_max_level(log::LevelFilter::Info);
     raise_heap_limit();
+    // before any hashing that matters: switch on the chip's hash engine (self-tested; software
+    // otherwise). Device builds route every alloy keccak256 (trie proofs, revm) through it.
+    let hash = sce_hash::init();
+    let hash_line = format!(
+        "Keccak-256 on {}, SHA-256 on {} ({})",
+        if hash.keccak_engine { "the chip's hash engine" } else { "software" },
+        if hash.sha256_engine { "the chip's hash engine" } else { "software" },
+        hash.note
+    );
+    log::info!("{hash_line}");
     // the signer (PID 3) keeps our persistent state: wait for it to attach, then load the
     // policy counters and the light client before registering the server (before any host input)
     let xns = xous_names::XousNames::new().unwrap();
@@ -479,6 +489,7 @@ fn main() -> ! {
                     heap_limit: HEAP_LIMIT as u64,
                     max_input: MAX_INPUT as u64,
                     signer: signer.address().map(|a| a.to_vec()).unwrap_or_default().into(),
+                    hash_engine: Some(hash_line.clone().into_bytes().into()),
                 };
                 reply(mem, alloy_rlp::encode(&st), |_, _| Vec::new());
             }

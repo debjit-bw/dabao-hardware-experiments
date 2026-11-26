@@ -630,6 +630,7 @@ pub struct SignResult {
 
 /// Reply to `wire::TYPE_STATUS`: the verifier's memory budget.
 #[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
+#[rlp(trailing)]
 pub struct DeviceStatus {
     /// Free physical RAM, bytes; 0 = not measured (Xous maps memory lazily, so the verifier
     /// can't probe it safely; kept for a future kernel-side query).
@@ -640,6 +641,9 @@ pub struct DeviceStatus {
     pub max_input: u64,
     /// The signer's address, if attached (empty otherwise).
     pub signer: Bytes,
+    /// Which hash backend the verifier uses (the chip's combohash engine or software) and its
+    /// boot self-test. Absent from firmware before 2026-11-26.
+    pub hash_engine: Option<Bytes>,
 }
 
 /// Host <-> device framing (same envelope as eth-burner): `length (u32 BE) || type || message`;

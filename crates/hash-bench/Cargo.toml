@@ -1,0 +1,22 @@
+[package]
+name = "hash-bench"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Benchmark: the Baochip's combohash engine (SHA-256, and its SHA3 mode as a raw Keccak-f[1600] for Ethereum's Keccak-256) against software, with known-answer checks"
+publish = false
+
+[[bin]]
+name = "hash-bench"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4.14"
+xous = "0.9.71"
+log-server = { package = "xous-api-log", version = "0.1.70" }
+sha2 = { version = "0.10", default-features = false }
+alloy-primitives = { version = "1.6.1", default-features = false }
+
+# the engine code is device-only; host builds run only the software reference tests
+[target.'cfg(target_os = "xous")'.dependencies]
+utralib = { version = "0.1.27", default-features = false, features = ["bao1x"] }

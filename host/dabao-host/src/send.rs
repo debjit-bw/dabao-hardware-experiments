@@ -54,6 +54,10 @@ pub fn status(tcp: Option<&str>) -> Result<()> {
         kb(st.max_input),
         if st.signer.len() == 20 { Address::from_slice(&st.signer).to_string() } else { "not attached".into() }
     );
+    match &st.hash_engine {
+        Some(h) => println!("hashing: {}", String::from_utf8_lossy(h)),
+        None => println!("hashing: not reported (firmware before 2026-11-26: software)"),
+    }
     Ok(())
 }
 

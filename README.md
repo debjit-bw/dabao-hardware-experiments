@@ -27,7 +27,12 @@ setting changed, or the co-signature expired (docs/postcondition.md).
 This is a hackathon prototype, tested on Sepolia with tiny amounts and not audited. Each doc
 has measurements, transaction links and limits. Don't put real funds behind it.
 
-**How it uses the chip** (MMU, RRAM, TRNG, the RTL, and what it doesn't use): [docs/hardware.md](docs/hardware.md).
+**Ethereum's hash runs on the chip's hash engine.** The engine's "SHA3" mode turns out to be a
+raw Keccak permutation, so every Keccak-256 in the verifier (Merkle proofs, the EVM) runs on it,
+and so does the light client's SHA-256. It is self-tested at every boot, with a software
+fallback. Simulating a swap went from 201 to ~125 ms with identical results (docs/hash-engine.md).
+
+**How it uses the chip** (MMU, RRAM, TRNG, the hash engine, the RTL, and what it doesn't use): [docs/hardware.md](docs/hardware.md).
 
 **New here? Read [docs/GUIDE.md](docs/GUIDE.md):** the architecture, every file, and how to build, run
 and change everything, in plain English.
@@ -40,6 +45,7 @@ crates/verifier      process 2: light client, witness verification, revm, 7730, 
 crates/signer        process 3 (PID 3, no keystore): the key and the RRAM slots, signs only verifier-approved jobs
 crates/xous-evm      witness-verified simulation + effects inspector + postcondition (no Xous deps)
 crates/light-client  sync-committee verification (BLS12-381, SSZ proofs)
+crates/sce-hash      Keccak-256 / SHA-256 on the chip's hash engine (self-tested, software fallback)
 crates/clear-sign    ERC-7730 checker;   descriptors/  the descriptors compiled into the firmware
 crates/policy        signing policy;     policy/       the policy compiled into the firmware
 crates/sim-types     wire format, Safe and MultiSend encoding
@@ -47,7 +53,7 @@ contracts/           DabaoPostcondition (on-chain check), DemoPayRouter (demo); 
 host/dabao-host      host companion: witness building (eth_getProof), light-client sync, Safe flow
 tools/bao-mcp        MCP server: lets an agent propose Safe transactions to the board
 demo/                agent (poisoned invoice) and postcondition demos
-vendor/xous-core     submodule: xous-core fork (three commits on upstream)
+vendor/xous-core     submodule: xous-core fork (six commits on upstream)
 ```
 
 ## Build from source

@@ -20,7 +20,9 @@ use ark_ec::{
 };
 use ark_ff::{Zero, field_hashers::DefaultFieldHasher};
 use ark_serialize::CanonicalDeserialize;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+// the chip's hash engine on the device (self-tested at boot by the verifier), software elsewhere
+use sce_hash::Sha256Hw as Sha256;
 
 pub const SYNC_COMMITTEE_SIZE: usize = 512;
 pub const SLOTS_PER_EPOCH: u64 = 32;
