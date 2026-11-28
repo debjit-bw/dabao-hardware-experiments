@@ -3754,6 +3754,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pke-bench"
+version = "0.1.0"
+dependencies = [
+ "ark-bls12-381",
+ "ark-ec",
+ "ark-ff 0.6.0",
+ "log",
+ "utralib",
+ "xous",
+ "xous-api-log",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -643,6 +643,8 @@ No Xous code here, so it also runs on a laptop.
 | `crates/lc-bench/src/main.rs` | Times BLS verification on the chip. |
 | `crates/hash-bench/Cargo.toml` | Package file. |
 | `crates/hash-bench/src/main.rs` | Finds how the hash engine lays out the Keccak state, checks Keccak-256 and SHA-256 against software, and times both. |
+| `crates/pke-bench/Cargo.toml` | Package file. |
+| `crates/pke-bench/src/main.rs` | Probes the public-key engine on BLS12-381 (test image). On our board its compute core hangs on every job (docs/pke.md). |
 
 ### 7.11 `host/dabao-host`: the computer side
 
@@ -734,6 +736,8 @@ No Xous code here, so it also runs on a laptop.
 | `docs/xous-core-fork.md` | Each change in our xous-core fork, and why. |
 | `docs/hardware.md` | What the chip offers, what we use, and how. |
 | `docs/hash-engine.md` | Keccak-256 and SHA-256 on the chip's hash engine: how, the self-test, board timings. |
+| `docs/pke.md` | The public-key engine: what the RTL says, why it could have helped the light client, and how it hangs on our board. |
+| `docs/vault-value.md` | Vault deposits valued on the simulated state: the inflation attack, the rule, board results. |
 | `docs/custom-boot1.md` | The plan for our own boot1 and a hardware-protected key. Not done yet. |
 | `docs/safe-cosigner.md` | The Safe setup and checks. |
 | `docs/postcondition.md` | The final on-chain check. |
@@ -1074,6 +1078,7 @@ Flash as usual and read the console.
 
 ```sh
 SERVICE=hash-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
+SERVICE=pke-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
 scripts/flash-and-log.py --until "HASH DONE" vendor/xous-core/target/riscv32imac-unknown-xous-elf/release/{loader,xous,apps}.uf2
 ```
 
@@ -1490,13 +1495,14 @@ scripts/uniswap-calldata.py $DEAD 10000000000 --multicall --slippage-bps 50
 scripts/flash-and-log.py --help
 ```
 
-Builds (normal, with a USB console, the BLS benchmark, the hash-engine benchmark, the first engine experiment):
+Builds (normal, with a USB console, the BLS benchmark, the hash-engine benchmark, the PKE probe, the first engine experiment):
 
 ```sh
 scripts/build-device.sh
 GENERIC_HID=0 scripts/build-device.sh
 SERVICE=lc-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
 SERVICE=hash-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
+SERVICE=pke-bench GENERIC_HID=0 scripts/build-device.sh dabao-console
 SERVICE=engine-spike GENERIC_HID=0 scripts/build-device.sh dabao-console
 ```
 

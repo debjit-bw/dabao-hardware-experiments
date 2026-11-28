@@ -103,8 +103,9 @@ hashing.
 - **The documentation doesn't promise this mode.** The word layout and SHA3 behaviour come
   from the RTL and the board, not from documentation, which is why the self-test runs at every
   boot.
-- **Not used:** AES (we don't encrypt anything), the PKE big-number engine (it might speed up
-  BLS12-381, but we haven't tried) and secp256k1 (no hardware for it; signing stays in software).
+- **Not used:** AES (we don't encrypt anything), the PKE big-number engine (tried: its compute
+  core doesn't finish any job on our board, see pke.md) and secp256k1 (no hardware for it;
+  signing stays in software).
 
 ## Reproduce
 

@@ -1,0 +1,21 @@
+[package]
+name = "pke-bench"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Probe (TEST IMAGE ONLY): the Baochip's PKE engine on BLS12-381's base field and G1, against arkworks"
+publish = false
+
+[[bin]]
+name = "pke-bench"
+path = "src/main.rs"
+
+# everything is device-only: a host build is an empty main
+[target.'cfg(target_os = "xous")'.dependencies]
+log = "0.4.14"
+xous = "0.9.71"
+log-server = { package = "xous-api-log", version = "0.1.70" }
+ark-bls12-381 = { version = "0.6", default-features = false, features = ["curve"] }
+ark-ec = { version = "0.6", default-features = false }
+ark-ff = { version = "0.6", default-features = false }
+utralib = { version = "0.1.27", default-features = false, features = ["bao1x"] }

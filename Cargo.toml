@@ -17,6 +17,7 @@ members = [
     "crates/bio-dma-probe",
     "crates/slot-probe",
     "crates/hash-bench",
+    "crates/pke-bench",
     "crates/sce-hash",
     "host/dabao-host",
     "tools/bao-mcp",

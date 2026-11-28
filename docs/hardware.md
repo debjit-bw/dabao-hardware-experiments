@@ -89,9 +89,15 @@ different padding) runs on it: the sponge in software, every permutation on the 
   went from 201 to 124–129 ms with identical results. Signing barely changes, because about
   0.7 s of it is the light client's BLS pairing check.
 
-**Not used:** AES (nothing to encrypt) and the public-key engine (PKE). There's no hardware for
-secp256k1, so signing is software. Whether the PKE could speed up BLS12-381 is an open question
-we didn't explore.
+**Not used:** AES (nothing to encrypt). There's no hardware for secp256k1, so signing is
+software.
+
+**Tried and failed: the public-key engine (PKE)** ([pke.md](pke.md)). Its RTL describes modular
+arithmetic and Weierstrass point operations over any prime up to 576 bits, which could have
+done the light client's G1 work: aggregating the public keys (122 ms of the 0.71 s per header)
+and loading a new committee. On our board, its compute core doesn't finish any job, not even a
+GCD. Its clock runs (41 MHz, measured) and the inputs load. There's no driver, test bench or
+documentation to compare against, so we stopped. `crates/pke-bench` reproduces the hang.
 
 ## The key store: what the hardware protects, and why our key doesn't use it
 
