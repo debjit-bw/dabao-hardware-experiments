@@ -128,16 +128,21 @@ fn run_as(input: &[u8], counters: &Counters, lc: &lc::LightClient, safe_owner: O
     let res = xous_evm::sim::simulate_then(input, |_| {}, &opts, |r, reads, call| {
         // ERC-7730: what the user would be shown vs what the simulation did
         r.clear_sign = clear_sign::check(&DESCRIPTORS, inp.chain_id, &inp.tx, r.success, &r.effects);
-        // the device's own policy: limits, fee, slippage, addresses
-        let out = policy::evaluate(&POLICY, &counters.values, &DESCRIPTORS, &inp, r);
+        // vault shares valued on the simulated state, read around the postcondition's own reads
+        let vaults = policy::vaults(&POLICY, inp.chain_id);
+        let ok = r.success && reads.slots.len() == 6;
+        let (receipts, post) = xous_evm::vaults::around(r, &vaults, inp.tx.from, call, |call| {
+            safe_owner.filter(|_| ok).map(|device| {
+                let threshold = reads.slots[1];
+                xous_evm::postcondition::build(r, &inp.tx, device, threshold, inp.block.timestamp, &reads.code_hashes, &limited, call)
+            })
+        });
+        // the device's own policy: limits, fee, slippage, addresses, vault deposits
+        let out = policy::evaluate(&POLICY, &counters.values, &DESCRIPTORS, &inp, r, &receipts);
         r.policy = out.check;
         if !counters.ok() {
             r.policy.violations.push(b"policy counters unreadable: can't enforce spending limits".to_vec().into());
         }
-        let post = safe_owner.filter(|_| r.success && reads.slots.len() == 6).map(|device| {
-            let threshold = reads.slots[1];
-            xous_evm::postcondition::build(r, &inp.tx, device, threshold, inp.block.timestamp, &reads.code_hashes, &limited, call)
-        });
         (out.updates, post)
     });
     let mut run = match res {

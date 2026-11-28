@@ -54,7 +54,8 @@ Code: `crates/policy` (rules, host-testable), `crates/verifier/src/counters.rs` 
 | may call | the call has calldata and `tx.to` is not in `contracts` |
 | may receive | a plain transfer's target, or any shown address, is neither the sender nor in `recipients`. (A contract in `contracts` may be shown as a spender, if nothing is sent to it.) |
 | swaps | not exactly one swap paid out to the sender, or the sender gains nothing, or an exact-output maximum is more than `maxSlippageBps` above the simulated input |
-| no leftovers | the called contract ends up keeping ETH or tokens (wrapping excepted): anyone can sweep a router |
+| no leftovers | the called contract ends up keeping ETH or tokens (wrapping, and a deposit into a listed vault, excepted): anyone can sweep a router |
+| vault deposits | the shares the sender gains in a listed vault (`vaults`) redeem for more than `maxSlippageBps` less than it paid, by `previewRedeem` on the simulated state after the transaction; or they can't be read. See docs/vault-value.md |
 
 Amounts in `policy.json` are whole units ("0.005" ETH, "1" USDC), converted with the
 decimals of the firmware's token list. A limit can only name an asset the device can also
@@ -64,9 +65,10 @@ display.
 
 ```
 max network fee 0.002 ETH; max slippage 300 bps; assets without a limit refused
-may call SwapRouter02 0x3bFA…e48E, WETH9 0xfFf9…6B14, DemoPayRouter 0x1ab7…5Fc7
+may call SwapRouter02 0x3bFA…e48E, WETH9 0xfFf9…6B14, DemoPayRouter 0x1ab7…5Fc7, DemoVault 0x1837…F163
 may receive: the sender, burn address 0x…dEaD
-daily limits: 0.005 ETH, 0.002 WETH, 1 USDC
+vaults (deposits valued on the simulated state): DemoVault 0x1837…F163
+daily limits: 0.005 ETH, 0.002 WETH, 1 USDC, 0.002 dvETH
 ```
 
 `dabao-host policy` prints the policy in force and the counters, as the device reports them.

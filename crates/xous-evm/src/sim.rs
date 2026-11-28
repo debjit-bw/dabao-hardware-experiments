@@ -106,7 +106,7 @@ pub enum At {
     Post,
 }
 
-/// A follow-up call from `tx.from` (contract mode only): `(state, to, calldata) -> (success, output)`.
+/// A follow-up call from `tx.from` (a view, gas price 0, no nonce check): `(state, to, calldata) -> (success, output)`.
 pub type PostCall<'a> = dyn FnMut(At, Address, Vec<u8>) -> Result<(bool, Bytes), String> + 'a;
 
 /// `simulate` with [`Options`]; returns the result and the pre-state `reads`.
@@ -256,7 +256,9 @@ pub fn simulate_then<R>(
     let (from, chain_id, as_contract) = (input.tx.from, input.chain_id, opts.as_contract);
     let mut call = |at: At, to: Address, data: Vec<u8>| -> Result<(bool, Bytes), String> {
         if !as_contract {
-            return Err("follow-up calls are only for contract mode".into());
+            // a sender's follow-up calls are views run at gas price 0, after its own transaction
+            evm.ctx.cfg.disable_nonce_check = true;
+            evm.ctx.cfg.disable_base_fee = true;
         }
         match at {
             At::Pre if uncommitted.is_none() => return Err("pre-state calls must come before post-state calls".into()),

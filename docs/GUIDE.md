@@ -357,22 +357,24 @@ reported as "unexplained" and blocks signing.
 | WETH | `deposit`, `withdraw`, `transfer`, `approve` | mainnet, Sepolia |
 | Uniswap SwapRouter02 | `exactInputSingle`, `exactOutputSingle`, `swapExactTokensForTokens`, `swapTokensForExactTokens`, and `multicall` of these | mainnet, Sepolia |
 | DemoPayRouter | `pay` | Sepolia |
+| DemoVault | `deposit`, `redeem` | Sepolia |
 
 Anything else with calldata is "blind signing" and is refused.
 
-### The built-in policy (demo, version 3)
+### The built-in policy (demo, version 4)
 
 | Rule | Value |
 |---|---|
 | Chains | Sepolia only |
-| Daily limits (UTC days) | 0.005 ETH, 0.002 WETH, 1 USDC |
+| Daily limits (UTC days) | 0.005 ETH, 0.002 WETH, 1 USDC, 0.002 dvETH (vault shares) |
 | Assets with no limit | refused |
 | Largest network fee | 0.002 ETH |
 | Largest slippage | 3% |
-| May be called | SwapRouter02, WETH, DemoPayRouter |
+| May be called | SwapRouter02, WETH, DemoPayRouter, DemoVault |
 | May receive | `0x...dEaD`, plus the sender itself |
 | Swaps | one at a time, paid out to the sender |
-| Leftovers | a called contract may not keep funds |
+| Leftovers | a called contract may not keep funds, except a listed vault |
+| Vault deposits | the shares must redeem for what was paid, less 3%, on the simulated state after the transaction (docs/vault-value.md) |
 
 The board's own account and the Safes it co-signs for share one daily budget. An approval
 counts as spending its full amount.
@@ -672,6 +674,8 @@ No Xous code here, so it also runs on a laptop.
 | `contracts/.gitignore` | Ignores Foundry's output. |
 | `contracts/src/DabaoPostcondition.sol` | `begin` records balances, `check` reverts if one changed worse than allowed, a Safe setting changed or the deadline passed. `verify` is the same check for the board's simulation. |
 | `contracts/src/DemoPayRouter.sol` | A demo payment router whose owner can make it keep the change. Never use it for real. |
+| `contracts/src/DemoVault.sol` | A demo ETH vault with ERC-4626-style share math and no protection against the inflation attack, on purpose. No owner. |
+| `contracts/test/DemoVault.t.sol` | The inflation attack's arithmetic: two tests, no fork needed. |
 | `contracts/test/Postcondition.t.sol` | Eight tests on a fork of Sepolia. |
 
 ### 7.14 `descriptors` and `policy`: the settings you edit
@@ -705,12 +709,15 @@ No Xous code here, so it also runs on a laptop.
 |---|---|
 | `demo/agent/run.sh` | Runs Claude Code as a payment agent, limited to reading the inbox and using the wallet tools. |
 | `demo/agent/compromised.sh` | Plays an agent that was fooled (the board refuses), then a thief with only the agent key (the Safe refuses). |
-| `demo/agent/api_agent.py` | The agent on the Claude API instead of Claude Code: wallet tools taken from `bao-mcp` over MCP, plus a read-only inbox. `--scenario pay` pays the honest invoice; `--scenario hack` plays a fooled agent proposing the fraud one, which the board refuses. `swap` and `swap-hack` do the same with a Uniswap swap (`build_swap` tool), where the attack changes only the swap's recipient. Needs `pip install anthropic` and `CLAUDE_API_KEY`. |
+| `demo/agent/api_agent.py` | The agent on the Claude API instead of Claude Code: wallet tools taken from `bao-mcp` over MCP, plus a read-only inbox. `--scenario pay` pays the honest invoice; `--scenario hack` plays a fooled agent proposing the fraud one, which the board refuses. `swap` and `swap-hack` do the same with a Uniswap swap (`build_swap` tool), where the attack changes only the swap's recipient. `vault` deposits into the demo vault (`encode_call` tool): refused after `demo/vault/attack.sh`, co-signed after `reset.sh`. Needs `pip install anthropic` and `CLAUDE_API_KEY`. |
 | `demo/agent/mcp.json` | Points the agent at `bao-mcp`. |
 | `demo/agent/inbox/INV-0042.md` | An honest invoice. |
 | `demo/agent/inbox/INV-0043.md` | A fraud invoice with a hidden note for AI assistants. |
 | `demo/agent/inbox-swap/REQ-0044.md` | An honest swap request: ETH to USDC, kept in the Safe. |
 | `demo/agent/inbox-swap/REQ-0045.md` | The same request, poisoned: pay the swap's USDC to another wallet, with a hidden note. |
+| `demo/agent/inbox-vault/REQ-0046.md` | An honest request: deposit 0.0001 ETH into the team's vault. |
+| `demo/vault/attack.sh` | A stranger (`.dabao-keys/attacker.key`) inflates the empty vault's share price: 1 wei deposit, then a 0.00006 ETH donation. |
+| `demo/vault/reset.sh` | The stranger redeems, leaving the vault empty. |
 | `demo/postcondition/run.sh` | Changes the router after signing, so the postcondition reverts the payment. With `honest` it doesn't change it. |
 | `demo/postcondition/switch.sh` | Flips the demo router. Needs the original router owner's key. |
 
@@ -792,6 +799,8 @@ All held by the signer (process 3). It serves 176 to 209 to the verifier, and no
 | Recovery owner | `0x6a657Ba092207e2836c5B53Fa36d808794556250` |
 | DabaoPostcondition | `0x0435e385AA3BAA0D9D782458DC3B10621702b26D` |
 | DemoPayRouter | `0x1ab73Bb30Da0a020bDa2F942F524F3CA75ab5Fc7` |
+| DemoVault | `0x18375B9E9cDA8Cd25ecbCB69AE94c74f7d02F163` |
+| Vault attacker (demo) | `0x79BE6B0DC7028eaf7643E7F31F8490730B227132` |
 | MultiSendCallOnly 1.4.1 | `0x9641d764fc13c8B624c04430C7356C1C7C8102e2` |
 | SwapRouter02 | `0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E` |
 | WETH | `0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14` |
@@ -983,9 +992,16 @@ python3 demo/agent/api_agent.py --scenario pay
 python3 demo/agent/api_agent.py --scenario hack
 python3 demo/agent/api_agent.py --scenario swap
 python3 demo/agent/api_agent.py --scenario swap-hack
+demo/vault/attack.sh
+python3 demo/agent/api_agent.py --scenario vault
+demo/vault/reset.sh
+python3 demo/agent/api_agent.py --scenario vault
 demo/postcondition/run.sh honest
 demo/postcondition/run.sh
 ```
+
+The vault runs: refused on the inflated vault, then a deposit of 0.0001 ETH from the Safe
+(docs/vault-value.md has the withdrawal that makes it repeatable).
 
 In order: an honest agent with two invoices (sends 0.0001 ETH), a fooled agent and then a
 stolen agent key, a normal router payment, and a router that changes its mind (reverts on chain).
@@ -1018,7 +1034,7 @@ Every other command, and the environment variables: [part 15](#15-command-refere
 
 ## 11. How to test
 
-### On the computer (61 tests)
+### On the computer (64 tests)
 
 ```sh
 cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-client -p bao-mcp -p sce-hash -p hash-bench
@@ -1026,7 +1042,7 @@ cargo test --locked -p sim-types -p xous-evm -p clear-sign -p policy -p light-cl
 
 Name the packages like this. Some crates in the workspace are board programs.
 
-### Contracts (8 tests, uses a Sepolia fork)
+### Contracts (10 tests, uses a Sepolia fork)
 
 ```sh
 cd contracts
@@ -1459,7 +1475,9 @@ $H lc-anchor
 | `scripts/uniswap-calldata.py` | `<from> [amount_wei] [token_out] [fee] [--multicall] [--slippage-bps N]` | read |
 | `demo/agent/run.sh` | none, env `MODEL` | **send** |
 | `demo/agent/compromised.sh` | none | **sign** requested, must be refused |
-| `demo/agent/api_agent.py` | `--scenario pay`, `hack`, `swap` or `swap-hack`, env `CLAUDE_API_KEY`, `MODEL` | **send** (`pay`, `swap`); the hack scenarios must be refused |
+| `demo/agent/api_agent.py` | `--scenario pay`, `hack`, `swap`, `swap-hack` or `vault`, env `CLAUDE_API_KEY`, `MODEL` | **send** (`pay`, `swap`, `vault` on an honest vault); the hack scenarios and `vault` after `attack.sh` must be refused |
+| `demo/vault/attack.sh` | none; the vault must be empty | **send** (attacker key) |
+| `demo/vault/reset.sh` | none | **send** (attacker key) |
 | `demo/postcondition/run.sh` | `[honest]` | **send** |
 | `demo/postcondition/switch.sh` | `true` or `false` | **send** |
 
@@ -1492,6 +1510,9 @@ python3 demo/agent/api_agent.py --scenario pay
 python3 demo/agent/api_agent.py --scenario hack
 python3 demo/agent/api_agent.py --scenario swap
 python3 demo/agent/api_agent.py --scenario swap-hack
+demo/vault/attack.sh
+python3 demo/agent/api_agent.py --scenario vault
+demo/vault/reset.sh
 demo/postcondition/run.sh honest
 demo/postcondition/run.sh
 demo/postcondition/switch.sh false

@@ -2,7 +2,7 @@
 //! with the firmware's policy and with small crafted policies.
 use alloy_primitives::{Address, Bytes, U256, address};
 use policy::{ChainPolicy, Counter, Limit, Outcome, Policy, counter_id, evaluate};
-use sim_types::{Effect, SimInput, SimResult, effect};
+use sim_types::{Effect, SimInput, SimResult, VaultReceipt, effect};
 
 const SEPOLIA: u64 = 11_155_111;
 const WETH: Address = address!("0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14");
@@ -18,7 +18,7 @@ fn sim(fixture: &[u8]) -> (SimInput, SimResult) {
 }
 
 fn eval(p: &Policy, counters: &[Counter], input: &SimInput, r: &SimResult) -> Outcome {
-    evaluate(p, counters, &clear_sign::builtin(), input, r)
+    evaluate(p, counters, &clear_sign::builtin(), input, r, &Ok(vec![]))
 }
 
 fn text(o: &Outcome) -> String {
@@ -41,7 +41,7 @@ fn small(eth_daily: &str, weth_daily: Option<&str>) -> Policy {
     Policy {
         version: 1,
         id: Bytes::from_static(b"test"),
-        chains: vec![ChainPolicy { chain_id: SEPOLIA, max_fee: U256::ZERO, max_slippage_bps: 10_000, contracts: vec![], recipients: vec![], allow_unlimited_assets: false, limits }],
+        chains: vec![ChainPolicy { chain_id: SEPOLIA, max_fee: U256::ZERO, max_slippage_bps: 10_000, contracts: vec![], recipients: vec![], allow_unlimited_assets: false, limits, vaults: vec![] }],
     }
 }
 
@@ -216,4 +216,72 @@ fn plain_eth_to_a_callable_contract_is_refused() {
     r.clear_sign.addresses = vec![ROUTER];
     let p = policy::builtin();
     assert!(text(&eval(&p, &fresh(&p), &input, &r)).contains("not an allowed recipient"));
+}
+
+const VAULT: Address = address!("0x00000000000000000000000000000000000Fa017");
+
+/// A 0.0001 ETH deposit into VAULT (the ETH send fixture, re-aimed): the effects a deposit has,
+/// and a policy that may call VAULT and lists it as a vault (or not).
+fn deposit(listed: bool) -> (Policy, SimInput, SimResult) {
+    let (mut input, mut r) = sim(include_bytes!("../../xous-evm/fixtures/sepolia-eth-send.rlp"));
+    let me = input.tx.from;
+    input.tx.to = VAULT;
+    input.tx.data = Bytes::from_static(&[0xf3, 0x40, 0xfa, 0x01]);
+    let p_wei = eth("0.0001");
+    let z = Address::ZERO;
+    r.effects.retain(|e| e.kind == effect::GAS_FEE);
+    r.effects.push(Effect { kind: effect::NATIVE_OUT, contract: z, from: me, to: z, amount: p_wei, extra: Bytes::new() });
+    r.effects.push(Effect { kind: effect::NATIVE_IN, contract: z, from: z, to: VAULT, amount: p_wei, extra: Bytes::new() });
+    r.effects.push(Effect { kind: effect::ERC20_TRANSFER, contract: VAULT, from: z, to: me, amount: U256::from(1), extra: Bytes::new() });
+    r.effects.push(Effect { kind: effect::NET_LOSS, contract: z, from: me, to: z, amount: p_wei, extra: Bytes::new() });
+    r.effects.push(Effect { kind: effect::NET_GAIN, contract: VAULT, from: me, to: z, amount: U256::from(1), extra: Bytes::new() });
+    r.clear_sign.addresses = vec![me];
+    let mut p = small("1", None);
+    p.chains[0].max_slippage_bps = 300;
+    p.chains[0].contracts = vec![VAULT];
+    if listed {
+        p.chains[0].vaults = vec![VAULT];
+    }
+    (p, input, r)
+}
+
+fn receipt(shares: u64, value: &str) -> Result<Vec<VaultReceipt>, String> {
+    Ok(vec![VaultReceipt { vault: VAULT, asset: Address::ZERO, shares_before: U256::ZERO, shares_after: U256::from(shares), value: eth(value) }])
+}
+
+#[test]
+fn vault_deposit_worth_what_was_paid_passes() {
+    let (p, input, r) = deposit(true);
+    let o = evaluate(&p, &fresh(&p), &clear_sign::builtin(), &input, &r, &receipt(1, "0.0001"));
+    assert!(o.check.violations.is_empty(), "{}", text(&o));
+    assert!(text(&o).contains("redeemable for 0.0001 ETH after this transaction"), "{}", text(&o));
+}
+
+#[test]
+fn vault_deposit_into_an_inflated_vault_is_refused() {
+    // the inflation attack: 1 share for 0.0001 ETH, worth 0.00008 after the deposit
+    let (p, input, r) = deposit(true);
+    let o = evaluate(&p, &fresh(&p), &clear_sign::builtin(), &input, &r, &receipt(1, "0.00008"));
+    assert!(text(&o).contains("vault deposit: 0.0001 ETH buys 1 raw units of"), "{}", text(&o));
+    assert!(text(&o).contains("2000 bps less than paid (policy max 300 bps)"), "{}", text(&o));
+    assert!(o.updates.is_empty() || !o.check.violations.is_empty());
+    // within the slippage allowed: 2.5% less
+    let o = evaluate(&p, &fresh(&p), &clear_sign::builtin(), &input, &r, &receipt(1, "0.0000975"));
+    assert!(o.check.violations.is_empty(), "{}", text(&o));
+}
+
+#[test]
+fn vault_must_be_listed_and_readable() {
+    // callable but not a listed vault: it keeps the ETH, refused as before
+    let (p, input, r) = deposit(false);
+    let o = evaluate(&p, &fresh(&p), &clear_sign::builtin(), &input, &r, &Ok(vec![]));
+    assert!(text(&o).contains("keeps 0.0001 ETH"), "{}", text(&o));
+    // listed, but its shares couldn't be read: refused
+    let (p, input, r) = deposit(true);
+    let o = evaluate(&p, &fresh(&p), &clear_sign::builtin(), &input, &r, &Err("vault: can't read balanceOf".into()));
+    assert!(text(&o).contains("can't value a vault's shares"), "{}", text(&o));
+    assert!(text(&o).contains("keeps 0.0001 ETH"), "{}", text(&o));
+    // shares minted to someone else: no receipt for the sender, so the vault keeps the ETH
+    let o = evaluate(&p, &fresh(&p), &clear_sign::builtin(), &input, &r, &receipt(0, "0"));
+    assert!(text(&o).contains("keeps 0.0001 ETH"), "{}", text(&o));
 }

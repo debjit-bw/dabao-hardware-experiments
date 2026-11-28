@@ -30,7 +30,7 @@ pub fn compile(out: &str, input: &str) -> Result<()> {
     keys(&j, &["comment", "id", "chains"], "policy")?;
     let mut p = Policy { version: POLICY_VERSION, id: j["id"].as_str().context("id")?.as_bytes().to_vec().into(), chains: vec![] };
     for c in j["chains"].as_array().context("chains")? {
-        keys(c, &["comment", "chainId", "maxNetworkFee", "maxSlippageBps", "unlimitedAssets", "contracts", "recipients", "dailyLimits"], "chain")?;
+        keys(c, &["comment", "chainId", "maxNetworkFee", "maxSlippageBps", "unlimitedAssets", "contracts", "recipients", "vaults", "dailyLimits"], "chain")?;
         let chain_id = c["chainId"].as_u64().context("chainId")?;
         ensure!(!p.chains.iter().any(|x| x.chain_id == chain_id), "chain {chain_id} listed twice");
         let max_fee = match c.get("maxNetworkFee") {
@@ -51,6 +51,10 @@ pub fn compile(out: &str, input: &str) -> Result<()> {
             }
         };
         let (contracts, recipients) = (list("contracts")?, list("recipients")?);
+        let vaults = list("vaults")?;
+        for v in &vaults {
+            ensure!(contracts.contains(v), "vault {v} is not in contracts (a vault must also be callable)");
+        }
         let mut limits: Vec<Limit> = vec![];
         for l in c.get("dailyLimits").and_then(|v| v.as_array()).map(|v| v.as_slice()).unwrap_or(&[]) {
             keys(l, &["comment", "asset", "amount"], "dailyLimits entry")?;
@@ -67,7 +71,7 @@ pub fn compile(out: &str, input: &str) -> Result<()> {
             ensure!(daily < (U256::from(1) << 127), "limit for {a} too large");
             limits.push(Limit { asset, daily });
         }
-        p.chains.push(ChainPolicy { chain_id, max_fee, max_slippage_bps, contracts, recipients, allow_unlimited_assets, limits });
+        p.chains.push(ChainPolicy { chain_id, max_fee, max_slippage_bps, contracts, recipients, allow_unlimited_assets, limits, vaults });
     }
     let n = p.limits().count();
     ensure!(n <= MAX_LIMITS, "{n} daily limits; the device has counters for {MAX_LIMITS}");

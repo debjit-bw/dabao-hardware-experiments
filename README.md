@@ -11,7 +11,9 @@ A signer for the Baochip Dabao (Baochip-1x, Xous). Before every signature, the b
 3. **checks that every effect it recognises is explained** by an ERC-7730 field
    (docs/clear-signing.md);
 4. **applies the owner's policy**: daily limits in RRAM, who may be called or paid, fee and slippage caps,
-   compiled into the firmware (docs/policy.md);
+   compiled into the firmware (docs/policy.md). Some rules read the simulated state itself:
+   a vault deposit must buy shares worth what was paid, which catches the ERC-4626 inflation
+   attack that every event check passes (docs/vault-value.md);
 5. **signs a digest it built itself**, in a separate process. That process runs as process 3,
    in place of Xous's keystore, and is the only one that maps the key's storage
    (docs/xous-core-fork.md#4-the-signer-as-process-3-ec255a6cf).
@@ -49,10 +51,10 @@ crates/sce-hash      Keccak-256 / SHA-256 on the chip's hash engine (self-tested
 crates/clear-sign    ERC-7730 checker;   descriptors/  the descriptors compiled into the firmware
 crates/policy        signing policy;     policy/       the policy compiled into the firmware
 crates/sim-types     wire format, Safe and MultiSend encoding
-contracts/           DabaoPostcondition (on-chain check), DemoPayRouter (demo); foundry
+contracts/           DabaoPostcondition (on-chain check), DemoPayRouter, DemoVault (demos); foundry
 host/dabao-host      host companion: witness building (eth_getProof), light-client sync, Safe flow
 tools/bao-mcp        MCP server: lets an agent propose Safe transactions to the board
-demo/                agent (poisoned invoice) and postcondition demos
+demo/                agent (poisoned invoice, swaps, vault), vault attack and postcondition demos
 vendor/xous-core     submodule: xous-core fork (six commits on upstream)
 ```
 
@@ -117,7 +119,7 @@ $H send-tx --chain sepolia --to 0x000000000000000000000000000000000000dEaD --val
 
 A new board makes its own key: fund that address on Sepolia first, and add `--broadcast` to
 really send. [Every command, option and script, with examples](docs/GUIDE.md#15-command-reference).
-Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/agent/api_agent.py --scenario pay|hack|swap|swap-hack` (Claude API), `demo/postcondition/run.sh`.
+Demos: `demo/agent/run.sh`, `demo/agent/compromised.sh`, `demo/agent/api_agent.py --scenario pay|hack|swap|swap-hack|vault` (Claude API), `demo/vault/attack.sh` / `reset.sh`, `demo/postcondition/run.sh`.
 
 `RPC_URL` selects the JSON-RPC node (default: publicnode). The Safe flow needs the demo keys
 (`dabao-host safe keys` creates them in `.dabao-keys/`, which is gitignored).

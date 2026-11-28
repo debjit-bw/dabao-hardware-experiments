@@ -12,6 +12,10 @@
 //!   allowance the sender grants (at its full amount: an allowance is spending authority), plus
 //!   the maximum network fee for ETH. Measured from effects, not from calldata, so a router or
 //!   multicall can't hide it.
+//! * Vault deposits are valued on the simulated state, not from events: the shares the sender
+//!   gains must redeem (`previewRedeem`, after the transaction) for what it paid, less the
+//!   slippage allowed. Events say how many shares were minted, not what they are worth; a vault
+//!   whose share price was pushed up (the ERC-4626 "inflation attack") mints too few.
 //! * Time: a day is `block.timestamp / 86400` of the simulated block, which the verifier
 //!   requires to be the light-client-proven parent's timestamp + 12 s (signing is refused
 //!   without that proof), so the clock is as trustworthy as the sync committee.
@@ -22,9 +26,9 @@ use clear_sign::{
     check::{asset_label, format_amount},
     model::DescriptorSet,
 };
-use sim_types::{PolicyCheck, SimInput, SimResult, effect};
+use sim_types::{PolicyCheck, SimInput, SimResult, VaultReceipt, effect};
 
-pub const POLICY_VERSION: u64 = 2;
+pub const POLICY_VERSION: u64 = 3;
 /// Counters available (app slots 176..208, kept by the signer for the verifier).
 pub const MAX_LIMITS: usize = 32;
 /// `max_slippage_bps` meaning "no limit".
@@ -51,6 +55,10 @@ pub struct ChainPolicy {
     /// Allow spending assets that have no daily limit (else refused).
     pub allow_unlimited_assets: bool,
     pub limits: Vec<Limit>,
+    /// Vaults (ERC-4626 views: `asset`, `balanceOf`, `previewRedeem`) that may keep what is
+    /// deposited, if the shares received are worth it on the simulated state. Also callable
+    /// contracts only if listed in `contracts`.
+    pub vaults: Vec<Address>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RlpEncodable, RlpDecodable)]
@@ -129,9 +137,22 @@ fn bytes(s: String) -> Bytes {
     s.into_bytes().into()
 }
 
+/// The policy's vaults on `chain_id`.
+pub fn vaults(p: &Policy, chain_id: u64) -> Vec<Address> {
+    p.chains.iter().filter(|c| c.chain_id == chain_id).flat_map(|c| c.vaults.iter().copied()).collect()
+}
+
 /// Evaluate `input` / `sim` against `p`. `counters[i]` is the counter of the `i`-th limit
-/// ([`Policy::limits`]); `tokens` formats amounts.
-pub fn evaluate(p: &Policy, counters: &[Counter], tokens: &DescriptorSet, input: &SimInput, sim: &SimResult) -> Outcome {
+/// ([`Policy::limits`]); `tokens` formats amounts. `receipts`: the [`vaults`] this transaction
+/// changed, valued on the simulated state (`xous_evm::vaults`); Err = they couldn't be read.
+pub fn evaluate(
+    p: &Policy,
+    counters: &[Counter],
+    tokens: &DescriptorSet,
+    input: &SimInput,
+    sim: &SimResult,
+    receipts: &Result<Vec<VaultReceipt>, String>,
+) -> Outcome {
     let mut v: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     let mut updates = Vec::new();
@@ -198,7 +219,34 @@ pub fn evaluate(p: &Policy, counters: &[Counter], tokens: &DescriptorSet, input:
         }
     }
 
-    // a called contract must not keep funds (anyone can sweep a router); wrapping is the exception
+    // vault deposits: what the shares are worth after the transaction, read from its state
+    let receipts: &[VaultReceipt] = match receipts {
+        Ok(r) => r,
+        Err(e) => {
+            v.push(format!("can't value a vault's shares on the simulated state: {e}"));
+            &[]
+        }
+    };
+    let deposited = |asset: Address| receipts.iter().any(|r| r.vault == tx.to && r.asset == asset && r.shares_after > r.shares_before);
+    for r in receipts {
+        let gain = r.shares_after.saturating_sub(r.shares_before);
+        let paid = sim.effects.iter().find(|e| e.kind == effect::NET_LOSS && e.from == me && e.contract == r.asset).map(|e| e.amount);
+        let (false, Some(paid)) = (gain.is_zero(), paid) else { continue };
+        let short = paid.saturating_sub(r.value);
+        let bps = short * U256::from(10_000) / paid;
+        let what = format!("{} buys {} (vault {}), redeemable for {} after this transaction", amt(r.asset, paid), amt(r.vault, gain), r.vault, amt(r.asset, r.value));
+        if cp.max_slippage_bps < NO_SLIPPAGE_LIMIT && bps > U256::from(cp.max_slippage_bps) {
+            v.push(format!(
+                "vault deposit: {what}: {bps} bps less than paid (policy max {} bps). The vault's share price may have been pushed up (inflation attack)",
+                cp.max_slippage_bps
+            ));
+        } else {
+            notes.push(format!("vault deposit: {what} (valued on the simulated state)"));
+        }
+    }
+
+    // a called contract must not keep funds (anyone can sweep a router); wrapping, and a deposit
+    // into a listed vault (valued above), are the exceptions
     if !tx.data.is_empty() && tx.to != me {
         let wraps = sim.effects.iter().any(|e| e.kind == effect::WRAP && e.contract == tx.to);
         let mut kept: Vec<(Address, U256, U256)> = Vec::new(); // asset, received, sent on
@@ -224,7 +272,7 @@ pub fn evaluate(p: &Policy, counters: &[Counter], tokens: &DescriptorSet, input:
             }
         }
         for (asset, got, sent) in kept {
-            if got > sent {
+            if got > sent && !(cp.vaults.contains(&tx.to) && deposited(asset)) {
                 v.push(format!("the called contract {} keeps {}", tx.to, amt(asset, got - sent)));
             }
         }
@@ -332,6 +380,9 @@ pub fn describe(p: &Policy, counters: &[Counter], tokens: &DescriptorSet) -> Vec
         }
         for a in &cp.recipients {
             out.push(format!("  may receive {a}"));
+        }
+        for a in &cp.vaults {
+            out.push(format!("  vault       {a} (deposits valued on the simulated state)"));
         }
         for (i, _, l) in p.limits().filter(|(_, c, _)| *c == cp.chain_id) {
             let k = counters.get(i).copied().unwrap_or_default();

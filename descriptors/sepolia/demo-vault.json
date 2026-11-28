@@ -1,0 +1,33 @@
+{
+  "$schema": "https://github.com/ethereum/clear-signing-erc7730-registry/blob/master/specs/erc7730-v1.schema.json",
+  "context": {
+    "$id": "DemoVault (dabao-hackathon)",
+    "contract": {
+      "deployments": [{ "chainId": 11155111, "address": "0x18375B9E9cDA8Cd25ecbCB69AE94c74f7d02F163" }]
+    }
+  },
+  "metadata": {
+    "owner": "Written for dabao-hackathon (contracts/src/DemoVault.sol). DEMO: an ETH vault with ERC-4626-style share math and no inflation-attack protection",
+    "contractName": "Demo ETH vault",
+    "token": { "name": "Demo ETH vault share", "ticker": "dvETH", "decimals": 18 }
+  },
+  "display": {
+    "formats": {
+      "deposit(address receiver)": {
+        "intent": "Deposit ETH into the vault",
+        "fields": [
+          { "path": "@.value", "label": "Amount", "format": "amount" },
+          { "path": "receiver", "label": "Shares to", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local"] } }
+        ]
+      },
+      "redeem(uint256 shares, address receiver, address owner)": {
+        "intent": "Withdraw from the vault",
+        "fields": [
+          { "path": "shares", "label": "Shares", "format": "tokenAmount", "params": { "tokenPath": "@.to" } },
+          { "path": "receiver", "label": "ETH to", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local"] } },
+          { "path": "owner", "label": "From", "format": "addressName", "params": { "types": ["eoa", "contract"], "sources": ["local"] } }
+        ]
+      }
+    }
+  }
+}

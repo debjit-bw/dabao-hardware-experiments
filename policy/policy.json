@@ -1,6 +1,6 @@
 {
   "comment": "The signing policy compiled into the firmware (dabao-host compile-policy; scripts/compile-descriptors.sh does it). Amounts are in whole units (ETH, or the token's ticker unit from the firmware's token list). Chains not listed here are refused.",
-  "id": "dabao-hackathon demo policy v3",
+  "id": "dabao-hackathon demo policy v4",
   "chains": [
     {
       "chainId": 11155111,
@@ -10,10 +10,14 @@
       "contracts": [
         "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E",
         "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
-        "0x1ab73Bb30Da0a020bDa2F942F524F3CA75ab5Fc7"
+        "0x1ab73Bb30Da0a020bDa2F942F524F3CA75ab5Fc7",
+        "0x18375B9E9cDA8Cd25ecbCB69AE94c74f7d02F163"
       ],
       "recipients": [
         "0x000000000000000000000000000000000000dEaD"
+      ],
+      "vaults": [
+        "0x18375B9E9cDA8Cd25ecbCB69AE94c74f7d02F163"
       ],
       "dailyLimits": [
         {
@@ -27,6 +31,10 @@
         {
           "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
           "amount": "1"
+        },
+        {
+          "asset": "0x18375B9E9cDA8Cd25ecbCB69AE94c74f7d02F163",
+          "amount": "0.002"
         }
       ]
     }

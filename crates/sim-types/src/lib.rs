@@ -172,6 +172,20 @@ pub struct PolicyCheck {
     pub notes: Vec<Bytes>,
 }
 
+/// What a vault's shares are worth, read from the simulated state (not from events): the
+/// sender's share balance before and after the transaction, and `previewRedeem` of the gain on
+/// the state after it. Filled by the verifier for the policy's vaults whose storage changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VaultReceipt {
+    pub vault: Address,
+    /// The vault's `asset()` (zero = ETH).
+    pub asset: Address,
+    pub shares_before: U256,
+    pub shares_after: U256,
+    /// `previewRedeem(shares_after - shares_before)` after the transaction (zero if no gain).
+    pub value: U256,
+}
+
 /// Reply to `wire::TYPE_POLICY`: the policy in force and its counters, as text.
 #[derive(Debug, Clone, Default, PartialEq, Eq, RlpEncodable, RlpDecodable)]
 pub struct PolicyStatus {

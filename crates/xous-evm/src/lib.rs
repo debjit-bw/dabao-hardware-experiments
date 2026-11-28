@@ -9,3 +9,4 @@ pub mod chainspec;
 pub mod effects;
 pub mod postcondition;
 pub mod sim;
+pub mod vaults;

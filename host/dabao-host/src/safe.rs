@@ -219,10 +219,13 @@ fn local_device(raw: &[u8], input: &SimInput, device: Address) -> Result<std::re
     };
     let res = xous_evm::sim::simulate_then(raw, |_| {}, &opts, |r, reads, call| {
         r.clear_sign = clear_sign::check(&descriptors, input.chain_id, &input.tx, r.success, &r.effects);
-        r.policy = policy::evaluate(&pol, &[], &descriptors, input, r).check;
-        let post = r.success.then(|| {
-            xous_evm::postcondition::build(r, &input.tx, device, reads.slots[1], input.block.timestamp, &reads.code_hashes, &limited, call)
+        let vaults = policy::vaults(&pol, input.chain_id);
+        let (receipts, post) = xous_evm::vaults::around(r, &vaults, input.tx.from, call, |call| {
+            r.success.then(|| {
+                xous_evm::postcondition::build(r, &input.tx, device, reads.slots[1], input.block.timestamp, &reads.code_hashes, &limited, call)
+            })
         });
+        r.policy = policy::evaluate(&pol, &[], &descriptors, input, r, &receipts).check;
         post
     });
     let (sim, reads, post) = match res {

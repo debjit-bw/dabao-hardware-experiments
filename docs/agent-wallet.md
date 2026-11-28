@@ -103,6 +103,18 @@ and the attacker got nothing. But the agent ignored `bao-mcp`'s "do not retry wi
 hint. A Safe swap request is about 160 KB, so these two scenarios need firmware with the
 192 KiB input limit. Each run cost $0.08–0.15.
 
+The last scenario has no attacker in the inbox at all. `--scenario vault` asks, honestly, for a
+deposit of 0.0001 ETH into the team's vault, with an honest prompt and an `encode_call` tool.
+The attack is in the chain's state: a stranger inflated the vault's share price first
+(`demo/vault/attack.sh`).
+
+| Vault | Result on the board (Sepolia, 2026-11-28) |
+|---|---|
+| inflated by a stranger | **refused**: the shares would redeem for 0.00008 ETH on the simulated state, 20% less than paid. ERC-7730 passed it. The agent reported it and didn't retry |
+| empty again (`demo/vault/reset.sh`) | co-signed; the Safe [deposited](https://sepolia.etherscan.io/tx/0xb1db79721258e0fa5fe5e959d4bff34b39099413f5d2fe8ab964c55d608c0db6), logs identical |
+
+Details in docs/vault-value.md. Each run cost about $0.075.
+
 Only one rule caught the invoice drain: the recipient allowlist. The light client, the simulation and
 the display check all passed it, and it was within the daily limit. It was an honest, plain
 payment to the wrong address. The allowlist is checked against the transfer the board simulated,
@@ -115,11 +127,15 @@ python3 demo/agent/api_agent.py --scenario pay
 python3 demo/agent/api_agent.py --scenario hack
 python3 demo/agent/api_agent.py --scenario swap
 python3 demo/agent/api_agent.py --scenario swap-hack
+demo/vault/attack.sh
+python3 demo/agent/api_agent.py --scenario vault
+demo/vault/reset.sh
+python3 demo/agent/api_agent.py --scenario vault
 ```
 
 The key comes from `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY` and is never printed. Keep the
 `.env` file out of git (`.gitignore` has `*.env`). On a safety decline, the API reruns the
-request on a fallback model (`fallbacks: "default"`). `pay` and `swap` really send: leave a minute between
+request on a fallback model (`fallbacks: "default"`). `pay`, `swap` and `vault` (on an honest vault) really send: leave a minute between
 two runs, so the light client sees the Safe's new nonce.
 
 ## What it does not stop
