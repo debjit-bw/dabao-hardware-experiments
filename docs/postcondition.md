@@ -52,6 +52,7 @@ only with the same checks.
 | the same signatures, live, same nonce and state | would execute before the deadline; `GS013` after it |
 | honest router payment | [executed](https://sepolia.etherscan.io/tx/0x47003d0665bf6901a9ac34f63f7f0d4b79bc03ff5ebedcb8df5a856afc1e3823), logs identical |
 | drain; WETH to the router; a call to the Safe itself; no light-client proof | all refused |
+| Safe swaps 0.00001 ETH → USDC on Uniswap (agent demo, 2026-11-27) | [executed](https://sepolia.etherscan.io/tx/0xfb22210a70c13dbe5ea0062e4f4403c434d22c0fdcada1c75f87b0a5c4083af9). `check` asserted ETH −0.00001, USDC ≥ +0.445810 (the simulated output minus the 1% shown; the same figure as the swap's `amountOutMinimum`) and WETH ≥ 0. The Safe received 0.450314 USDC |
 
 Cost on the device: verifier ~1.0 s including the light client, peak heap 379–390 KB for
 96–100 KB witnesses.
@@ -86,7 +87,7 @@ buffer copy).
   Execute promptly, or use up the nonce.
 - **Untracked assets aren't asserted.** A token the simulation didn't move and the policy
   doesn't list, NFTs and ERC-1155s can change at inclusion without failing the check.
-- **Slippage allowances haven't been exercised through the Safe on the board**, only ETH.
+- **A slippage allowance has been exercised once, on the success path only:** the Uniswap swap above landed within its allowance. No swap whose output fell below the allowance has been tried on chain.
 - **Allowances aren't asserted.** An approval the call grants is counted by the policy at its
   full amount, but `check` only looks at balances.
 - **Strict for exact-output trades.** The check uses the simulated loss. A swap whose input
